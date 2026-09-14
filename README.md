@@ -1,5 +1,7 @@
 # The Week's Table — Meal Planner
 
+**Live:** https://pateldvija20.github.io/meal-planner/
+
 A single-file weekly meal planner for a family of three, with per-person portions, macros and a grocery list.
 
 - **Desktop (> 760px):** the full grid, queue and recipe library with drag-and-drop.
