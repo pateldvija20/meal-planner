@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#F4ECDF">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title>The Week's Table — Meal Planner</title>
+<title>The Week's Table</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1584,7 +1584,10 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-step]')){ const st=+b.dataset.step; mDay=(mDay+st+7)%7; return renderMToday(st); }
   if(b=q('[data-mremove]')){ const [d,m,i]=b.dataset.mremove.split('|'); const r=rec(plan[d][m][+i]); plan[d][m].splice(+i,1); renderAll(); return toast('Removed '+(r?shortName(r):'meal')); }
   if(b=q('[data-slot]')){ const [d,m]=b.dataset.slot.split('|'); return openSlotPicker(+d,m); }
-  if(q('#mReset')){ if(confirm('Reset the whole week back to the original plan?')){ plan=buildSeed(); armed=null; renderAll(); toast('Reset to this week’s plan'); } return; }
+  if(b=q('#mReset')){
+    if(!b.dataset.armed){ b.dataset.armed='1'; b.textContent='Tap again to reset the week'; setTimeout(()=>{ if(b.isConnected){ delete b.dataset.armed; b.textContent='↺ Reset week to plan'; } },3000); return; }
+    plan=buildSeed(); armed=null; renderAll(); return toast('Week reset to the original plan');
+  }
   if(b=q('[data-ming]')){ mOpenIng=mOpenIng===b.dataset.ming?null:b.dataset.ming; return renderMGrocery(); }
   if(b=q('[data-jump]')){ mDay=+b.dataset.jump; return setTab('today'); }
   if(q('#mgClear')){ store.set('mp_grocery',{}); return renderMGrocery(); }
