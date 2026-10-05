@@ -2,6 +2,16 @@
 let selPerson = store.get('mp_person') || 'm1';
 let units = store.get('mp_units') || 'us';
 let filter='all', cuisine='all', query='', armed=null, drawerView=null;
+let personal=null;            // person id when the page was opened with #dvija / #akshar / #aum
+let ingMode=null;             // 'family' | 'me' — null = default for the current view
+function readHash(){
+  const k=decodeURIComponent(location.hash.replace('#','')).toLowerCase();
+  const p=PEOPLE.find(x=>x.key===k); personal=p?p.id:null;
+  if(p){ selPerson=p.id; store.set('mp_person',p.id); }
+  document.body.classList.toggle('personal',!!personal);
+}
+readHash();
+const personalLink=pid=>`${location.origin}${location.pathname}#${personById(pid).key}`;
 let TODAY_IDX=todayIndex();
 let mTab=store.get('mp_tab'); if(!['discover','today','grocery','queue'].includes(mTab)) mTab='today';
 let mDay=TODAY_IDX, mOpenIng=null, sheetState=null;
@@ -225,7 +235,17 @@ function openDrawer(rid,ctxKey,keep){
   else if(batch){ servings=batch.servings; ingTitle=`Family batch · ${niceCount(servings)} servings`; ingSub=batchSummary(batch); }
   else { servings=PEOPLE.reduce((a,p)=>a+servingsFor(r,p.id,slot),0); ingTitle=`Family batch · ${niceCount(servings)} servings`; ingSub=`<div>One ${slot==='breakfast'?'breakfast':'meal'} for all three. Weekday dinners also cook tomorrow’s lunch.</div>`; }
   const parts = r.fixed ? [{pid:selPerson,day:null,s:1}] : batch ? batch.parts : genericParts(r,slot);
-  const ings = r.custom ? (r.ingText||[]).map(t=>`<li><span>${esc(t)}</span></li>`).join('') : batchIngredients(r,parts).map(ingLine).join('');
+  const mode = r.fixed ? 'me' : (ingMode || (personal?'me':'family'));
+  let partsUsed=parts;
+  if(mode==='me' && !r.fixed){
+    const mine=parts.filter(p=>p.pid===selPerson);
+    partsUsed = mine.length ? mine : genericParts(r,slot).filter(p=>p.pid===selPerson);
+    const sv=partsUsed.reduce((a,p)=>a+p.s,0);
+    ingTitle=`Just ${person().label} · ${niceCount(sv)} serving${sv===1?'':'s'}`;
+    ingSub = partsUsed.length>3 ? `<div>One a day through the week.</div>`
+      : partsUsed.length>1 ? `<div>${partsUsed.map(p=>`<b>${p.leftover?DAYS[p.day]+' lunch':'This meal'}:</b> ${niceCount(p.s)}`).join(' · ')}</div>` : '';
+  }
+  const ings = r.custom ? (r.ingText||[]).map(t=>`<li><span>${esc(t)}</span></li>`).join('') : batchIngredients(r,partsUsed).map(ingLine).join('');
   const locked = ctx && isLocked(ctx.d,ctx.slot);
   const st = ctx && statusOf(ctx.d,ctx.slot,selPerson);
   const slotActs = ctx && m ? `<div class="slot-acts">
@@ -234,7 +254,8 @@ function openDrawer(rid,ctxKey,keep){
       <button class="m-btn ghost ${st?'added':''}" data-dstatus="${ctxKey}">${ICON.check} ${st?esc(statusLabel(st)):'Mark eaten / skipped'}</button>
       ${!m.fixed?`<button class="m-btn ghost" data-dremove="${ctxKey}">${m.leftover?'Cook fresh instead':'Remove'}</button>`:''}</div>` : '';
   const dd = ctx ? (m&&m.leftover ? ctx.d : ctx.d) : null;
-  const pp=PEOPLE.map(p=>{ const q=portion(rid,p.id,slot,dd); return `<div class="dp ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="dp-h"><span class="who"><i></i>${p.label} <small>${niceCount(q.s)} serving${q.s===1?'':'s'}${q.v?' · '+(q.v==='chicken'?'chicken':esc(r.protein.veg[3])):''}</small></span><span class="dp-k">${q.kcal} kcal · <b>${q.p}g P</b></span></div><div class="dp-serve">${esc(serveText(r,q.s,q.v))}</div>${macroBar(q)}</div>`; }).join('');
+  const ppOrder = personal ? [personById(selPerson)].concat(PEOPLE.filter(p=>p.id!==selPerson)) : PEOPLE;
+  const pp=ppOrder.map(p=>{ const q=portion(rid,p.id,slot,dd); return `<div class="dp ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="dp-h"><span class="who"><i></i>${p.label} <small>${niceCount(q.s)} serving${q.s===1?'':'s'}${q.v?' · '+(q.v==='chicken'?'chicken':esc(r.protein.veg[3])):''}</small></span><span class="dp-k">${q.kcal} kcal · <b>${q.p}g P</b></span></div><div class="dp-serve">${esc(serveText(r,q.s,q.v))}</div>${macroBar(q)}</div>`; }).join('');
   const nv=r.protein?nutritionOf(r,'chicken'):null;
   const li=arr=>(arr&&arr.length?arr:['—']).map(x=>`<li>${esc(x)}</li>`).join('');
   $('#drawerBody').innerHTML=`
@@ -247,14 +268,18 @@ function openDrawer(rid,ctxKey,keep){
     ${!ctx&&!r.fixed?`<div class="slot-acts"><button class="m-btn ${state.queue.includes(rid)?'ghost added':''}" data-dq="${rid}">${state.queue.includes(rid)?'✓ Queued for Generate':'+ Add to plan'}</button></div>`:''}
     ${r.cat==='snack'?`<div class="pf-set snack-who"><span>Snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>`:''}
     <div class="upgrade"><span class="lift">Upgrade</span><span>${esc(r.upgrade)}</span></div>
-    <div class="d-sec"><h3>Portions <small>${r.fixed?'fixed daily':SLOT_LABEL[slot].toLowerCase()+' budget'}</small></h3><div class="d-portions">${pp}</div>
+    <div class="d-sec"><h3>Portions <small>${r.fixed?'fixed daily':SLOT_LABEL[slot].toLowerCase()+' budget'}</small></h3><div class="d-portions">${personal&&!r.fixed ? ppOne(pp) : pp}</div>
       <p class="pf-note">1 serving ≈ ${Math.round(n.kcal)} kcal · ${Math.round(n.p)}g P · ${Math.round(n.c)}g C · ${Math.round(n.f)}g F · ${Math.round(n.fib)}g fibre${nv?` (with chicken: ${Math.round(nv.kcal)} kcal · ${Math.round(nv.p)}g P)`:''}${r.protein?' — veg version':''}</p></div>
-    <div class="d-sec"><h3>Ingredients <small>${ingTitle}</small></h3>${ingSub?`<div class="batch-sub">${ingSub}</div>`:''}${batchNote?`<p class="pf-note">${batchNote}</p>`:''}<ul class="d-ing">${ings||'<li><span>—</span></li>'}</ul></div>
-    <div class="d-sec"><h3>Method <small>${r.fixed?'per glass':'for the whole batch'}</small></h3><ol class="d-steps">${li(r.method)}</ol></div>
+    <div class="d-sec"><h3>Ingredients ${r.fixed?`<small>${ingTitle}</small>`:`<span class="seg ing-toggle"><button data-ingmode="family" class="${mode==='family'?'active':''}" aria-pressed="${mode==='family'}">Family</button><button data-ingmode="me" class="${mode==='me'?'active':''}" aria-pressed="${mode==='me'}">Just ${esc(person().label)}</button></span>`}</h3>${r.fixed?'':`<p class="ing-title">${ingTitle}</p>`}${ingSub?`<div class="batch-sub">${ingSub}</div>`:''}${batchNote?`<p class="pf-note">${batchNote}</p>`:''}<ul class="d-ing">${ings||'<li><span>—</span></li>'}</ul></div>
+    <div class="d-sec"><h3>Method <small>${r.fixed?'per glass':mode==='me'?'same steps — use your amounts above':'for the whole batch'}</small></h3><ol class="d-steps">${li(r.method)}</ol></div>
     ${r.swaps&&r.swaps.length?`<div class="d-sec"><h3>Possible swaps</h3><ul class="d-swaps">${li(r.swaps)}</ul></div>`:''}
     ${r.custom?`<div class="form-actions"><button class="btn-ghost danger" id="d_del">Delete this recipe</button></div>`:''}`;
   if(r.custom){ const del=$('#d_del'); if(del) del.addEventListener('click',()=>removeCustom(rid)); }
   openShell(keep);
+}
+function ppOne(html){
+  const cards=html.split('<div class="dp ').filter(Boolean).map(c=>'<div class="dp '+c);
+  return cards[0] + (cards.length>1?`<details class="pp-more"><summary>Everyone’s portions</summary>${cards.slice(1).join('')}</details>`:'');
 }
 function closeDrawer(){ const dr=$('#drawer'); dr.classList.remove('open'); dr.setAttribute('aria-hidden','true'); $('#scrim').classList.remove('show'); drawerView=null; }
 function openShell(keep){ const dr=$('#drawer'); dr.classList.add('open'); dr.setAttribute('aria-hidden','false'); if(!keep) dr.querySelector('.drawer-body').scrollTop=0; $('#scrim').classList.add('show'); }
@@ -568,10 +593,13 @@ function openProfile(keep){
     ? `<div class="acct"><div><b>${esc(Sync.person?Sync.person.label:Sync.user.email)}</b><small>${esc(Sync.user.email)} · ${SYNC_LABEL[Sync.status]}</small></div><button class="btn-ghost" data-signout>Sign out</button></div>${Sync.status==='denied'?'<p class="pf-note warn">This Google account isn’t on the family list, so nothing syncs.</p>':''}`
     : `<div class="acct"><div><b>Not signed in</b><small>Changes save on this phone only</small></div><button class="btn-solid" data-signin>Sign in with Google</button></div>`;
   $('#drawerBody').innerHTML=`
-    <div class="d-ctx">Profile · this week</div>
+    <div class="d-ctx">${personal?`${pp.label}’s view`:'Profile'} · week of ${dayDate(0)}</div>
     <h2 class="d-name">${pp.label}'s dashboard</h2>
     ${acct}
-    <div class="pf-people">${PEOPLE.map(p=>`<button class="pf-person ${p.id===pid?'active':''}" style="--pc:${p.hex}" data-pfp="${p.id}" aria-pressed="${p.id===pid}"><b>${p.label}</b><small>${p.note} · ${p.target.toLocaleString()}</small></button>`).join('')}</div>
+    ${personal?`<div class="pview-row">Personal view — only ${pp.label}’s portions. <button class="btn-ghost" data-familyview>Family view</button></div>`:''}
+    <div class="pf-people" ${personal?'hidden':''}>${PEOPLE.map(p=>`<button class="pf-person ${p.id===pid?'active':''}" style="--pc:${p.hex}" data-pfp="${p.id}" aria-pressed="${p.id===pid}"><b>${p.label}</b><small>${p.note} · ${p.target.toLocaleString()}</small></button>`).join('')}</div>
+    <div class="seg pf-tabs" role="tablist"><button role="tab" data-ptab="tracker" class="${profTab==='tracker'?'active':''}" aria-selected="${profTab==='tracker'}">Tracker</button><button role="tab" data-ptab="week" class="${profTab==='week'?'active':''}" aria-selected="${profTab==='week'}">This week’s plan</button></div>
+    ${profTab==='tracker' ? trackerHTML(pid) : `
     <div class="d-sec"><h3>Targets <small>${esc(pp.goal)}</small></h3><div class="pf-kpis four">
       ${kpi('BMI',pp.bmi,'',pp.bmi>=25?'overweight range':pp.bmi<18.5?'underweight range':'healthy range')}
       ${kpi('BMR',pp.bmr.toLocaleString(),'kcal','at complete rest')}
@@ -594,8 +622,9 @@ function openProfile(keep){
       <p class="pf-note">${lowest.length?`Below 90% this week: <b>${lowest.join(', ')}</b>. `:'Every tracked micronutrient is at 90% or more. '}Calculated from each ingredient’s USDA/IFCT values — estimates, not lab data.</p></div>
     <div class="d-sec"><h3>The plan <small>${21-empty.length} of 21 meals planned</small></h3>
       <div class="sh-lbl">Most repeated</div><ul class="pf-list">${top.map(([rid,n])=>`<li><span>${esc(rec(rid).name)}</span><span>×${n}</span></li>`).join('')||'<li><span>Nothing planned yet</span><span></span></li>'}</ul>
-      <div class="sh-lbl">Open meals</div><p class="pf-note" style="margin:0">${empty.length?esc(empty.join(' · ')):'Every meal has something planned.'}</p></div>
+      <div class="sh-lbl">Open meals</div><p class="pf-note" style="margin:0">${empty.length?esc(empty.join(' · ')):'Every meal has something planned.'}</p></div>`}
     <div class="d-sec"><h3>Settings</h3>
+      <div class="pf-set links"><span>Personal links<small class="pf-sub">Opens straight into one person’s view</small></span><div class="link-list">${PEOPLE.map(p=>`<button class="btn-ghost" data-copylink="${p.id}">${p.label}’s link</button>`).join('')}</div></div>
       <div class="pf-set"><span>Grocery stores<small class="pf-sub">${state.stores.map(x=>esc(x.name)).join(' · ')}</small></span><button class="btn-ghost" data-gmanage>Manage</button></div>
       <div class="pf-set"><span>Weekly snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>
       <div class="pf-set"><span>Units</span><div class="seg">${[['us','US · oz'],['metric','Metric · g']].map(([u,l])=>`<button data-pfu="${u}" class="${u===units?'active':''}">${l}</button>`).join('')}</div></div></div>`;
@@ -604,8 +633,12 @@ function openProfile(keep){
 }
 
 /* ================= render all ================= */
+function renderPview(){
+  const html = personal ? `<span><b>${esc(personById(personal).label)}’s view</b> · only ${esc(personById(personal).label)}’s portions</span><button class="btn-ghost" data-familyview>Family view</button>` : '';
+  $('#pviewD').innerHTML=html; $('#pviewM').innerHTML=html;
+}
 function renderEverything(){
-  renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
+  renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
   if(drawerView && drawerView.t!=='form') refreshDrawer();
   if(sheetState){ if(sheetState.t==='place') renderPlacePicker(); else renderSlotList(); }
 }
@@ -664,6 +697,14 @@ $('#drawerBody').addEventListener('click',e=>{
   if(onGroceryClick(e)) return renderEverything();
 });
 $('#drawerBody').addEventListener('change',e=>{ if(onGroceryChange(e)) renderEverything(); });
+document.addEventListener('click',e=>{
+  let b;
+  if(e.target.closest('[data-familyview]')){ history.replaceState(null,'',location.pathname+location.search); readHash(); ingMode=null; renderEverything(); return toast('Family view'); }
+  if(b=e.target.closest('[data-copylink]')){ const url=personalLink(b.dataset.copylink);
+    try{ navigator.clipboard.writeText(url).then(()=>toast('Link copied — '+url.split('//')[1]),()=>toast(url)); }catch(err){ toast(url); } return; }
+  if(b=e.target.closest('[data-ingmode]')){ ingMode=b.dataset.ingmode; return refreshDrawer(); }
+});
+window.addEventListener('hashchange',()=>{ readHash(); ingMode=null; renderEverything(); });
 
 // mobile
 $('#mApp').addEventListener('click',e=>{
@@ -726,7 +767,7 @@ $('#grocery').addEventListener('click',()=>openGrocery());
 let lastAuthKey=null;
 Sync.onChange(s=>{
   const k=s.user?s.user.uid:null;
-  if(k!==lastAuthKey){ lastAuthKey=k; if(s.person) { selPerson=s.person.id; store.set('mp_person',selPerson); } }
+  if(k!==lastAuthKey){ lastAuthKey=k; if(s.person && !personal) { selPerson=s.person.id; store.set('mp_person',selPerson); } }
   renderEverything();
 });
 renderFilters(); renderEverything();

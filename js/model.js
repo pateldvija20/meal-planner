@@ -10,12 +10,15 @@ const PEOPLE = [
   {id:'m2', key:'aum',    label:'Aum',    note:'gaining', goal:'Lean gain 0.25 kg/wk · build muscle', sex:'m', age:25, kg:62, cm:180.3, act:1.465, adj:275, protein:120,
     email:'aumsathwara2811@gmail.com', hex:'#8A4767'},
 ];
-PEOPLE.forEach(p=>{
+function computePerson(p){
   p.bmr = Math.round(mifflin(p));
   p.tdee = Math.round(p.bmr*p.act);
   p.target = round50(p.tdee + p.adj);
   p.bmi = +(p.kg/((p.cm/100)**2)).toFixed(1);
-});
+}
+PEOPLE.forEach(p=>{ p.baseKg=p.kg; computePerson(p); });
+// weights saved from the tracker ("use for my targets") override the starting weight
+function applyProfiles(){ PEOPLE.forEach(p=>{ const o=(state&&state.profile||{})[p.id]; p.kg = o&&o.kg ? o.kg : p.baseKg; computePerson(p); }); }
 const personById = id => PEOPLE.find(p=>p.id===id);
 const personByEmail = em => PEOPLE.find(p=>p.email===(em||'').toLowerCase());
 // Micronutrient reference intakes (adult DRIs)
@@ -170,17 +173,19 @@ function normalize(st){
   st.grocery=st.grocery||{}; st.log=st.log||{};
   st.stores=Array.isArray(st.stores)&&st.stores.length?st.stores:STORES_DEFAULT.map(x=>Object.assign({},x));
   st.storeMap=st.storeMap||{};
+  st.profile=st.profile||{};
   st.weekStart=st.weekStart||activeWeekStart();
   return st;
 }
 let state = normalize(store.get(STATE_KEY) || migrateOld() || seedState());
+applyProfiles();
 let onStateSaved = null;                    // hook set by sync.js
 function saveState(opts){
   state.updatedAt=Date.now();
   store.set(STATE_KEY,state);
   if(onStateSaved && !(opts&&opts.localOnly)) onStateSaved(state);
 }
-function replaceState(remote){ state=normalize(remote); mountCustoms(); store.set(STATE_KEY,state); }
+function replaceState(remote){ state=normalize(remote); applyProfiles(); mountCustoms(); store.set(STATE_KEY,state); }
 
 /* custom recipes live in state (synced) */
 function mountCustoms(){
