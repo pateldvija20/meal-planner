@@ -307,7 +307,7 @@ function ppOne(html){
 }
 function closeDrawer(){ const dr=$('#drawer'); dr.classList.remove('open'); dr.setAttribute('aria-hidden','true'); $('#scrim').classList.remove('show'); drawerView=null; }
 function openShell(keep){ const dr=$('#drawer'); dr.classList.add('open'); dr.setAttribute('aria-hidden','false'); if(!keep) dr.querySelector('.drawer-body').scrollTop=0; $('#scrim').classList.add('show'); }
-function refreshDrawer(){ if(!drawerView) return; if(drawerView.t==='recipe') openDrawer(drawerView.rid,drawerView.ctx,true); else if(drawerView.t==='grocery') openGrocery(true); else if(drawerView.t==='profile') openProfile(true); }
+function refreshDrawer(){ if(!drawerView) return; if(drawerView.t==='recipe') openDrawer(drawerView.rid,drawerView.ctx,true); else if(drawerView.t==='grocery') openGrocery(true); else if(drawerView.t==='profile') openProfile(true); else if(drawerView.t==='notes') openNotes(true); }
 
 /* ================= custom recipes ================= */
 function openAddForm(){
@@ -540,7 +540,7 @@ function renderMToday(dir){
           <div class="dial-center"><span class="num" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal</span><span class="pct ${over?'over':''}">${pct}%</span></div></div>
         <div class="hero-macros">${hm('Protein',t.p,g.p,'var(--pro)')}${hm('Carbs',t.c,g.c,'var(--carb)')}${hm('Fat',t.f,g.f,'var(--fat)')}</div>
       </section>
-      ${notes}${rows}
+      ${rows}
     </div>
     <div class="m-foot"><button class="btn-solid" data-gen>✦ Generate</button><button class="btn-ghost" id="mReset">Starter plan</button></div>`;
   Motion.slide('days',$('#mToday .daystrip'),'day-ind',mDay);
@@ -691,7 +691,7 @@ function renderPview(){
   $('#pviewD').innerHTML=html; $('#pviewM').innerHTML=html;
 }
 function renderEverything(){
-  renderThemeBtns(); renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
+  renderThemeBtns(); renderBells(); renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
   if(drawerView && drawerView.t!=='form') refreshDrawer();
   if(sheetState){ if(sheetState.t==='place') renderPlacePicker(); else renderSlotList(); }
 }
@@ -897,3 +897,75 @@ setInterval(()=>{ if(activeWeekStart()>state.weekStart){ rolledChecked=false; ma
 
 // local-only visitors (or Firebase unavailable): don't wait for a sync that will never come
 setTimeout(()=>{ if(!Sync.user) maybeRollover(); },3000);
+
+/* ================= notifications ================= */
+var NOTE_KEY='mp_notes_read';                     // per phone: {noteId: true}
+var noteRead;   // loaded lazily: the first render runs before this file finishes loading
+var BELL='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5a6 6 0 0 1 12 0c0 5.5 2 7 2 7H4s2-1.5 2-7"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></svg>';
+// everything the family should be told this week, up to today, newest first
+function notifications(){
+  const ws=state.weekStart, pid=selPerson, pp=person(), out=[];
+  const g=buildGrocery().items.length;
+  const planned=DAYS.reduce((n,_,d)=>n+MEAL_SLOTS.filter(s=>mealFor(d,s,pid)).length,0);
+  out.push({id:`week-${ws}`, day:-1, e:'🗓️', bk:'var(--surface)', title:`Week of ${dayDate(0)} is planned`,
+    body:`${planned} meals for ${pp.label}, and ${g} items on the grocery list.`, go:'grocery'});
+  const sn=rec(state.snack.rid), sb=snackBatch();
+  if(sn) out.push({id:`snack-${ws}`, day:-1, e:emojiOf(sn), bk:'var(--c-breakfast)', title:`Snack box: ${sn.name}`,
+    body:`Prep ${sb?sb.servings:0} servings on Sunday. It keeps ${sn.keeps||'a week'}.`, open:sn.id});
+  for(let d=0; d<=TODAY_IDX; d++){
+    const b=batchFor(d,'dinner'); if(!b) continue; const r=rec(b.rid);
+    const lunch=b.parts.some(p=>p.leftover);
+    out.push({id:`cook-${ws}-${d}`, day:d, e:emojiOf(r), bk:'var(--c-snack)',
+      title: d===TODAY_IDX ? 'Cook tonight' : `${FULLDAY[d]}’s dinner`,
+      body:`${niceCount(b.servings)} servings of ${shortName(r)}.${lunch?` That covers ${FULLDAY[nextDay(d)]}’s lunch too.`:''}`, ctx:`${d}|dinner`, rid:b.rid});
+  }
+  if(TODAY_IDX>=FARALI.day-1){
+    const fl=rec(state.farali.lunch), fd=rec(state.farali.dinner);
+    out.push({id:`farali-${ws}`, day:FARALI.day-1, e:'🌾', bk:'var(--c-lunch)',
+      title: pid===FARALI.pid ? 'Your farali day is Thursday' : 'Aum eats farali on Thursday',
+      body:`${fl?shortName(fl):'Nothing yet'} for lunch, ${fd?shortName(fd):'nothing yet'} for dinner.`, ctx:`${FARALI.day}|lunch`});
+  }
+  return out.sort((a,b)=>b.day-a.day);
+}
+function reads(){ return noteRead || (noteRead = store.get('mp_notes_read') || {}); }
+function unreadCount(){ const r=reads(); return notifications().filter(n=>!r[n.id]).length; }
+function renderBells(){
+  const n=unreadCount();
+  document.querySelectorAll('[data-notes]').forEach(b=>{
+    b.innerHTML=(BELL||'')+(n?'<i class="bell-dot" aria-hidden="true"></i>':'');
+    b.setAttribute('aria-label', n ? `Notifications, ${n} unread` : 'Notifications');
+  });
+}
+function setRead(id,v){ reads(); if(v) noteRead[id]=true; else delete noteRead[id]; store.set(NOTE_KEY,noteRead); }
+function openNotes(keep){
+  reads(); const list=notifications(), n=list.filter(x=>!noteRead[x.id]).length;
+  drawerView={t:'notes'};
+  $('#drawerBody').innerHTML=`
+    <div class="d-ctx">${n?`${n} unread`:'All caught up'} · week of ${dayDate(0)}</div>
+    <h2 class="d-name">Notifications</h2>
+    ${n?`<div class="slot-acts"><button class="m-btn ghost" data-notes-all>Mark all as read</button></div>`:''}
+    <div class="notes-list">${list.map(x=>{ const unread=!noteRead[x.id];
+      return `<article class="notif ${unread?'unread':''}" style="--bk:${x.bk}">
+        <button class="notif-main" data-note-open="${x.id}">
+          <span class="notif-e" aria-hidden="true">${x.e}</span>
+          <span class="notif-tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span><small>${x.day<0?'This week':x.day===TODAY_IDX?'Today':FULLDAY[x.day]}</small></span>
+        </button>
+        <button class="notif-mark" data-note-toggle="${x.id}" aria-label="${unread?'Mark as read':'Mark as unread'}" title="${unread?'Mark as read':'Mark as unread'}">${unread?'<i class="unread-dot"></i>':'<i class="read-ring"></i>'}</button>
+      </article>`; }).join('')}</div>`;
+  openShell(keep);
+}
+document.addEventListener('click',e=>{
+  let b;
+  if(e.target.closest('[data-notes]')) return openNotes();
+  if(e.target.closest('[data-notes-all]')){ notifications().forEach(x=>setRead(x.id,true)); renderBells(); return openNotes(true); }
+  if(b=e.target.closest('[data-note-toggle]')){ const id=b.dataset.noteToggle; setRead(id,!reads()[id]); renderBells(); return openNotes(true); }
+  if(b=e.target.closest('[data-note-open]')){
+    const x=notifications().find(n=>n.id===b.dataset.noteOpen); if(!x) return;
+    setRead(x.id,true); renderBells();
+    if(x.go){ closeDrawer(); if(isMobile()) return setTab(x.go); return openGrocery(); }
+    if(x.rid) return openDrawer(x.rid,x.ctx);
+    if(x.open) return openDrawer(x.open,null);
+    if(x.ctx) return jumpTo(x.ctx);
+  }
+});
+renderBells();
