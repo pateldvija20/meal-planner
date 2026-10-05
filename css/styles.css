@@ -681,3 +681,11 @@ input[type=checkbox]:active{transform:scale(.9)}
 .notif-mark{flex:0 0 auto;width:48px;border:0;background:none;display:grid;place-items:center;border-radius:0 var(--r) var(--r) 0}
 .unread-dot{width:12px;height:12px;border-radius:50%;background:var(--c-dinner);box-shadow:0 0 0 2px rgba(255,255,255,.7)}
 .read-ring{width:12px;height:12px;border-radius:50%;border:2px solid var(--line-2)}
+/* side components of a dish ("+ Curd", "+ Egg") as separate chips */
+.sides{display:flex;flex-wrap:wrap;gap:5px;margin:3px 0 2px}
+.side{font-family:var(--f-sans);font-size:12.5px;font-weight:700;line-height:1.2;padding:3px 9px;border-radius:999px;background:color-mix(in srgb,currentColor 9%,transparent);color:inherit;white-space:nowrap}
+.d-sides{order:-2;margin:-2px 0 8px}
+.d-sides .side{font-size:13.5px;padding:4px 11px}
+.chip .sides{grid-column:2;margin:2px 0 0;gap:3px}
+.chip .side{font-size:11px;padding:1px 7px}
+.tile .sides{margin-top:6px}

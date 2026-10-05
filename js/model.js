@@ -173,6 +173,7 @@ function normalize(st){
   st.grocery=st.grocery||{}; st.log=st.log||{};
   st.stores=Array.isArray(st.stores)&&st.stores.length?st.stores:STORES_DEFAULT.map(x=>Object.assign({},x));
   st.storeMap=st.storeMap||{};
+  st.changes=Array.isArray(st.changes)?st.changes:[];
   st.profile=st.profile||{};
   st.weekStart=st.weekStart||activeWeekStart();
   return st;
@@ -424,7 +425,7 @@ function startNewWeek(ws){
   state.history=state.history.slice(0,8);
   state.prevSunDinner = gap===1 ? state.plan[6].dinner : null;
   const plan={}; DAYS.forEach((_,d)=>{ plan[d]=emptyDay(); });
-  state.plan=plan; state.weekStart=ws; state.log={}; state.grocery={};
+  state.plan=plan; state.weekStart=ws; state.log={}; state.grocery={}; state.changes=[];
   state.farali={lunch:null,dinner:null}; state.snack=Object.assign({},state.snack,{locked:false});
   return generateWeek({from:0});
 }

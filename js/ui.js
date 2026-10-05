@@ -19,6 +19,8 @@ let mDay=TODAY_IDX, mOpenIng=null, sheetState=null;
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const person=()=>personById(selPerson);
+function nameParts(r){ const p=String(r.name).split(' + '); return {main:p[0], sides:p.slice(1)}; }
+function sidesHTML(r){ const s=nameParts(r).sides; return s.length?`<span class="sides">${s.map(x=>`<span class="side">+ ${esc(x)}</span>`).join('')}</span>`:''; }
 const defSlot=r=>r.cat==='breakfast'?'breakfast':r.cat==='snack'?'snack':'dinner';
 const isLocked=(d,slot)=>slot==='snack'?!!state.snack.locked:!!state.plan[d].locks[slot];
 const shortName=r=>r.name.split('(')[0].trim();
@@ -55,29 +57,39 @@ const ICON={
 /* ================= mutations ================= */
 function commit(){ saveState(); renderEverything(); }
 const parseCtx=k=>{ const [d,slot]=k.split('|'); return {d:+d,slot}; };
+// who changed what — shared with the family through the synced state, shown in Notifications
+function logChange(d,slot,from,to,pid){
+  if(from===to) return;
+  const by = Sync.person ? Sync.person.label : person().label;
+  state.changes.unshift({id:'chg-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:Date.now(), d, slot, from:from||null, to:to||null, by, who: pid&&isFarali(pid,d)&&(slot==='lunch'||slot==='dinner') ? personById(pid).label : null});
+  state.changes=state.changes.slice(0,40);
+}
+const currentRid=(d,slot,pid)=>{ const m=mealFor(d,slot,pid); return m&&!m.leftover?m.rid:null; };
 function setMealView(d,slot,rid,pid=selPerson){
   const r=rec(rid); if(!r) return false;
   if(slot==='snack'){
     if(r.cat!=='snack'){ toast('Pick a snack-box recipe for the weekly snack'); return false; }
-    state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
+    logChange(null,'snack',state.snack.rid,rid); state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
   }
   if(r.cat==='snack'){ toast('That’s a snack-box recipe. It goes in the weekly snack.'); return false; }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){
     if(!r.farali){ toast(`${personById(pid).label}’s Thursday needs a farali recipe`); return false; }
-    state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
+    logChange(d,slot,state.farali[slot],rid,pid); state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
   }
   if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch or dinner recipe. Pick a breakfast.'); return false; }
   if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast. Pick a lunch or dinner recipe.'); return false; }
   const day=state.plan[d];
+  logChange(d,slot,currentRid(d,slot)||mealFor(d,slot)&&mealFor(d,slot).rid,rid);
   if(slot==='lunch' && LEFTOVER_DAYS.includes(d)) day.lunchFresh=true;
   day[slot]=rid; armed=null; commit();
   toast(`${shortName(r)} → ${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}`);
   return true;
 }
 function removeMealView(d,slot,pid=selPerson){
-  if(slot==='snack'){ state.snack.rid=null; return commit(); }
-  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ state.farali[slot]=null; return commit(); }
+  if(slot==='snack'){ logChange(null,'snack',state.snack.rid,null); state.snack.rid=null; return commit(); }
+  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ logChange(d,slot,state.farali[slot],null,pid); state.farali[slot]=null; return commit(); }
   const day=state.plan[d];
+  { const m=mealFor(d,slot); if(m) logChange(d,slot,m.rid,null); }
   if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off. Add a fresh lunch.'); }
   day[slot]=null; delete day.locks[slot]; commit();
 }
@@ -132,7 +144,7 @@ function chipHtml(m,d,slot,pid){
   const tag = st?`<div class="lo st">${esc(statusLabel(st))}</div>` : m.weekly?`<div class="lo">weekly snack · made Sunday</div>` : m.leftover?`<div class="lo">↩ ${m.from} dinner${pt.v==='chicken'?' · chicken':''}</div>` : m.farali?`<div class="lo">farali · ${pp.label}</div>` : pt.v?`<div class="lo">${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])} · ${pp.label}</div>`:'';
   const acts = m.fixed ? '' : `<div class="chip-act">${(!m.leftover&&!m.farali&&!(m.weekly&&d>0))?`<button class="lk ${locked?'on':''}" data-lock="${key}" title="${locked?'Unlock':'Lock so Generate keeps it'}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="x" data-remove="${key}" title="${m.leftover?'Cook a fresh lunch instead':'Remove'}" aria-label="Remove">×</button></div>`;
   return `<div class="chip ${m.fixed?'fixed':''} ${m.leftover?'leftover':''} ${m.farali?'farali':''} ${m.weekly?'weekly':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" ${m.fixed?'':'draggable="true"'} data-rid="${m.rid}" data-open="${m.rid}" data-ctx="${key}" style="--cat:${CATS[r.cat]};--sel:${pp.hex}">
-    <span class="chip-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r)}</span>${tag}<div class="nm">${esc(shortName(r))}</div>
+    <span class="chip-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r)}</span>${tag}<div class="nm">${esc(nameParts(r).main.split('(')[0].trim())}</div>${sidesHTML(r)}
     <div class="mac"><b>${pt.kcal}</b> kcal · <b style="color:var(--pro)">${pt.p}g</b> P${pt.s!==1&&!m.fixed?` · ${niceCount(pt.s)}×`:''}</div>${acts}</div>`;
 }
 function renderCal(){
@@ -208,7 +220,7 @@ function tileHTML(r,kind){
   const cls = kind==='feature' ? 'feature' : kind==='wide' ? 'wide colored' : '';
   return `<article class="tile ${cls}" style="--bk:${CAT_COLOR[r.cat]||'var(--surface-2)'}" data-rid="${r.id}" draggable="true">${stamp}
     <button class="m-hit" data-open="${r.id}"><span class="tile-emoji" aria-hidden="true">${emojiOf(r)}</span>
-      <span class="tile-name">${esc(r.name)}</span>
+      <span class="tile-name">${esc(nameParts(r).main)}</span>${sidesHTML(r)}
       ${kind?`<span class="tile-sub">${esc(r.upgrade)}</span>`:''}
       <span class="tile-meta"><b>${pt.kcal}</b> kcal · <b>${pt.p}g</b> protein</span>
       <span class="tile-sub">${esc(r.farali?'Farali':r.cuisine||CAT_LABEL[r.cat])}</span>
@@ -284,7 +296,7 @@ function openDrawer(rid,ctxKey,keep){
   $('#drawerBody').innerHTML=`
     ${ctx?`<div class="d-ctx">${FULLDAY[ctx.d]} · ${SLOT_LABEL[ctx.slot]}${m&&m.leftover?` · leftovers from ${m.from} dinner`:''}${m&&m.farali?` · farali for ${person().label}`:''}</div>`:''}
     <div class="d-hero-emoji" style="--bk:${ctx?SLOT_COLOR[ctx.slot]:(CAT_COLOR[r.cat]||'var(--surface)')}" aria-hidden="true">${emojiOf(r)}</div>
-    <h2 class="d-name">${esc(r.name)}</h2>
+    <h2 class="d-name">${esc(nameParts(r).main)}</h2>${sidesHTML(r).replace('class="sides"','class="sides d-sides"')}
     <div class="d-tagrow"><span class="tag" style="background:${CATS[r.cat]}">${r.farali?'farali':CAT_LABEL[r.cat]}</span>${r.cuisine?`<span class="tag ghost">${esc(r.cuisine)}</span>`:''}${r.custom?'<span class="tag ghost">custom</span>':''}</div>
     <div class="badges">${recipeBadges(r)}</div>
     ${r.protein?`<p class="pf-note">Shared base: one gravy, split into two pots — chicken for Akshar &amp; Aum, ${esc(r.protein.veg[3])} for Dvija. On Thursdays and Saturdays everyone gets ${esc(r.protein.veg[3])}.</p>`:''}
@@ -513,7 +525,7 @@ function renderMToday(dir){
       const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
       body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}">
         <span class="meal-ic" style="--bk:${SLOT_COLOR[s.id]}" aria-hidden="true">${emojiOf(r)}</span>
-        <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(r.name)}</span><span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
+        <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
         <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
       </div>`;
     } else {
@@ -551,7 +563,7 @@ function renderMToday(dir){
 function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery</h2></div>${groceryHTML('m')}`; }
 function renderMQueue(){
   const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
-    return `<div class="m-item" style="margin-bottom:8px"><span class="meal-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'Farali':CAT_LABEL[r.cat].replace(/^./,c=>c.toUpperCase())} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm ghost" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
+    return `<div class="m-item" style="margin-bottom:8px"><span class="meal-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><button class="m-hit" data-open="${rid}"><span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta">${r.farali?'Farali':CAT_LABEL[r.cat].replace(/^./,c=>c.toUpperCase())} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm ghost" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
     <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week.</p>
     <button class="btn-solid wide gen-big" data-gen>✦ Generate plan</button>
@@ -596,7 +608,7 @@ function renderSlotList(){
   const s=sheetState, cat=s.slot==='breakfast'?'breakfast':s.slot==='snack'?'snack':'main', q=s.q.toLowerCase();
   const fits=r=>!r.fixed && (s.far ? r.farali : r.cat===cat) && (!q||(r.name+' '+r.tags.join(' ')+' '+r.cuisine).toLowerCase().includes(q));
   const pslot=s.slot;
-  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><span class="tx"><span class="nm">${esc(r.name)}</span><span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
+  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><span class="tx"><span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
   const qd=state.queue.map(id=>rec(id)).filter(r=>r&&fits(r));
   const rest=RECIPES.filter(r=>fits(r)&&!state.queue.includes(r.id));
   const sec=(t,arr)=>arr.length?`<div class="sh-lbl">${t}</div>${arr.map(row).join('')}`:'';
@@ -925,7 +937,15 @@ function notifications(){
       title: pid===FARALI.pid ? 'Your farali day is Thursday' : 'Aum eats farali on Thursday',
       body:`${fl?shortName(fl):'Nothing yet'} for lunch, ${fd?shortName(fd):'nothing yet'} for dinner.`, ctx:`${FARALI.day}|lunch`});
   }
-  return out.sort((a,b)=>b.day-a.day);
+  out.sort((a,b)=>b.day-a.day);
+  const nm=id=>{ const r=rec(id); return r?nameParts(r).main:'nothing'; };
+  const ago=t=>{ const m=Math.round((Date.now()-t)/6e4); return m<1?'Just now':m<60?`${m} min ago`:m<1440?`${Math.round(m/60)} h ago`:`${Math.round(m/1440)} d ago`; };
+  const changes=(state.changes||[]).map(c=>{
+    const where = c.slot==='snack' ? 'Snack box' : `${FULLDAY[c.d]} ${SLOT_LABEL[c.slot].toLowerCase()}${c.who?` (${c.who})`:''}`;
+    const what = c.from&&c.to ? `${nm(c.from)} → ${nm(c.to)}` : c.to ? `Added ${nm(c.to)}` : `Removed ${nm(c.from)}`;
+    return {id:c.id, day:99, e:'🔄', bk:'var(--c-shake)', title:`${c.from&&c.to?'Swapped':c.to?'Added to':'Cleared'} ${where}`, body:`${what} · by ${c.by}`, when:ago(c.at), rid:c.to||c.from, ctx: c.slot==='snack'?null:`${c.d}|${c.slot}`};
+  });
+  return changes.concat(out);
 }
 function reads(){ return noteRead || (noteRead = store.get('mp_notes_read') || {}); }
 function unreadCount(){ const r=reads(); return notifications().filter(n=>!r[n.id]).length; }
@@ -948,7 +968,7 @@ function openNotes(keep){
       return `<article class="notif ${unread?'unread':''}" style="--bk:${x.bk}">
         <button class="notif-main" data-note-open="${x.id}">
           <span class="notif-e" aria-hidden="true">${x.e}</span>
-          <span class="notif-tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span><small>${x.day<0?'This week':x.day===TODAY_IDX?'Today':FULLDAY[x.day]}</small></span>
+          <span class="notif-tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span><small>${x.when||(x.day<0?'This week':x.day===TODAY_IDX?'Today':FULLDAY[x.day])}</small></span>
         </button>
         <button class="notif-mark" data-note-toggle="${x.id}" aria-label="${unread?'Mark as read':'Mark as unread'}" title="${unread?'Mark as read':'Mark as unread'}">${unread?'<i class="unread-dot"></i>':'<i class="read-ring"></i>'}</button>
       </article>`; }).join('')}</div>`;
