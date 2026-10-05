@@ -36,14 +36,14 @@
   </header>
 
   <div class="sec-head">
-    <h2>The Week</h2><span class="rule"></span>
+    <h2>The Week</h2><span class="hint" id="weekLabel"></span><span class="rule"></span>
+    <button class="ghost-btn solid" data-gen>✦ Generate</button>
     <button id="grocery" class="ghost-btn">☑ Grocery list</button>
-    <button id="reset" class="ghost-btn">↺ Reset to plan</button>
-    <span class="hint">drag a recipe onto a meal to swap it · click a meal for the recipe</span>
+    <button id="reset" class="ghost-btn">↺ Starter plan</button>
   </div>
   <div class="cal-scroll"><div class="cal" id="cal"></div></div>
 
-  <div class="sec-head"><h2>This Week's Queue</h2><span class="rule"></span></div>
+  <div class="sec-head"><h2>Plan Queue</h2><span class="rule"></span><span class="hint">placed first when you Generate</span><button class="ghost-btn solid" data-gen>✦ Generate</button></div>
   <div class="queue">
     <h3>Staged recipes <span class="cnt" id="qcount">0</span></h3>
     <div class="q-strip" id="qstrip"></div>
@@ -108,6 +108,7 @@
 <script src="js/foods.js"></script>
 <script src="js/recipes.js"></script>
 <script src="js/recipes-library.js"></script>
+<script src="js/recipes-snacks.js"></script>
 <script src="js/model.js"></script>
 <script src="js/sync.js"></script>
 <script src="js/ui.js"></script>

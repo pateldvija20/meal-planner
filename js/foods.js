@@ -105,6 +105,15 @@ const FOODS = {
   baingan:    F('Baingan (eggplant)',PROD,'walmart',[25,1,5.9,0.2,3,0.2,9,14,229,0,0]),
   cabbage:    F('Cabbage',PROD,'walmart',[25,1.3,5.8,0.1,2.5,0.5,40,12,170,0,0]),
   beans:      F('Green beans',PROD,'walmart',[31,1.8,7,0.2,2.7,1,37,25,211,0,0]),
+  // phase 4: weekly snack box
+  pumpkinseed:F('Pumpkin seeds',NUTS,'costco',[559,30,11,49,6,8.8,46,592,809,0,0]),
+  sunflower:  F('Sunflower seeds',NUTS,'costco',[584,21,20,51,8.6,5.3,78,325,645,0,0]),
+  walnut:     F('Walnuts',NUTS,'costco',[654,15.2,13.7,65,6.7,2.9,98,158,441,0,0]),
+  almondflour:F('Almond flour',NUTS,'costco',[571,21,20,50,10,3.7,269,268,733,0,0]),
+  roastedchana:F('Roasted chana',GRAIN,'apni',[369,22,58,5.5,17,6,58,160,900,0,0]),
+  cocoa:      F('Unsweetened cocoa powder',PANTRY,'costco',[228,19.6,58,13.7,37,13.9,128,499,1524,0,0]),
+  darkchoc:   F('Dark chocolate (85%)',PANTRY,'costco',[598,7.8,46,42.6,10.9,11.9,73,228,715,0,0]),
+  monkfruit:  F('Monkfruit sweetener',PANTRY,'costco',[0,0,0,0,0,0,0,0,0,0,0]),
   // pantry
   oil:        F('Cooking oil',PANTRY,'costco',[884,0,0,100,0,0,0,0,0,0,0]),
   honey:      F('Honey',PANTRY,'costco',[304,0.3,82,0,0.2,0.4,6,2,52,0,0]),

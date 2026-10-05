@@ -2,13 +2,15 @@
 let selPerson = store.get('mp_person') || 'm1';
 let units = store.get('mp_units') || 'us';
 let filter='all', cuisine='all', query='', armed=null, drawerView=null;
-const TODAY_IDX=(new Date().getDay()+6)%7;
+let TODAY_IDX=todayIndex();
 let mTab=store.get('mp_tab'); if(!['discover','today','grocery','queue'].includes(mTab)) mTab='today';
 let mDay=TODAY_IDX, mOpenIng=null, sheetState=null;
 
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const person=()=>personById(selPerson);
+const defSlot=r=>r.cat==='breakfast'?'breakfast':r.cat==='snack'?'snack':'dinner';
+const isLocked=(d,slot)=>slot==='snack'?!!state.snack.locked:!!state.plan[d].locks[slot];
 const shortName=r=>r.name.split('(')[0].trim();
 let toastT;
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1900); }
@@ -36,6 +38,8 @@ const ICON={
   lock:`<svg ${SV}><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`,
   unlock:`<svg ${SV}><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>`,
   swap:`<svg ${SV}><path d="M7 4 3.5 7.5 7 11M3.5 7.5H17M17 13l3.5 3.5L17 20M20.5 16.5H7"/></svg>`,
+  check:`<svg ${SV}><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>`,
+  spark:`<svg ${SV}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>`,
 };
 
 /* ================= mutations ================= */
@@ -43,6 +47,11 @@ function commit(){ saveState(); renderEverything(); }
 const parseCtx=k=>{ const [d,slot]=k.split('|'); return {d:+d,slot}; };
 function setMealView(d,slot,rid,pid=selPerson){
   const r=rec(rid); if(!r) return false;
+  if(slot==='snack'){
+    if(r.cat!=='snack'){ toast('Pick a snack-box recipe for the weekly snack'); return false; }
+    state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
+  }
+  if(r.cat==='snack'){ toast('That’s a snack-box recipe — it goes in the weekly snack'); return false; }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){
     if(!r.farali){ toast(`${personById(pid).label}'s Thursday needs a farali recipe`); return false; }
     state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
@@ -56,14 +65,31 @@ function setMealView(d,slot,rid,pid=selPerson){
   return true;
 }
 function removeMealView(d,slot,pid=selPerson){
+  if(slot==='snack'){ state.snack.rid=null; return commit(); }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ state.farali[slot]=null; return commit(); }
   const day=state.plan[d];
   if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off — add a fresh lunch'); }
   day[slot]=null; delete day.locks[slot]; commit();
 }
 function useLeftovers(d){ const day=state.plan[d]; day.lunchFresh=false; day.lunch=null; delete day.locks.lunch; commit(); toast(`${DAYS[d]} lunch is ${d===0?'Sunday':DAYS[d-1]}’s dinner again`); }
-function toggleLock(d,slot){ const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked — Generate will keep it':'Unlocked'); }
-function toggleQueue(id){ if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to queue'); } else { state.queue=state.queue.filter(x=>x!==id); toast('Removed from queue'); } armed=null; commit(); }
+function toggleLock(d,slot){
+  if(slot==='snack'){ state.snack.locked=!state.snack.locked; commit(); return toast(state.snack.locked?'Snack box locked for next week too':'Unlocked'); }
+  const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked — Generate will keep it':'Unlocked');
+}
+function toggleQueue(id){
+  if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to plan — tap Generate to place it'); }
+  else { state.queue=state.queue.filter(x=>x!==id); toast('Removed from the plan queue'); }
+  armed=null; commit();
+}
+function runGenerate(mode){
+  let sum;
+  if(mode==='next'){ sum=startNewWeek(addDaysIso(state.weekStart,7)); }
+  else sum=generateWeek({from: mode==='rest' ? TODAY_IDX+1 : 0});
+  TODAY_IDX=todayIndex(); if(mode==='next') mDay=0;
+  commit();
+  toast(`${mode==='next'?'Next week planned':'Plan refreshed'} · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}${sum.chicken?` · ${sum.chicken} chicken night${sum.chicken>1?'s':''}`:''}`);
+}
+function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit(); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
 function resetPlan(){ const s=seedState(); s.queue=state.queue; s.custom=state.custom; s.grocery={}; state=normalize(s); commit(); toast('Week reset to the starter plan'); }
 
 /* ================= desktop ================= */
@@ -76,26 +102,29 @@ function renderSync(){
   $('#syncBox').innerHTML=`<span class="sync-pill s-${s}"><i></i>${SYNC_LABEL[s]}</span>`+
     (Sync.user ? `<span class="sync-who">${esc(who?who.label:Sync.user.email)}</span><button class="ghost-btn" data-signout>Sign out</button>`
                : `<button class="ghost-btn solid" data-signin>Sign in to sync</button>`);
+  $('#weekLabel').textContent=`Week of ${dayDate(0)} – ${dayDate(6)}`;
   $('#footer').innerHTML=`Targets (Mifflin-St Jeor): ${PEOPLE.map(p=>`${p.label} ${p.target.toLocaleString()} kcal · ${p.protein}g P`).join(' · ')}. Every day includes the morning seed water and a protein shake. Nutrition estimates ±10–25%.`;
 }
 function chipHtml(m,d,slot,pid){
   const r=rec(m.rid); if(!r) return '';
-  const pt=portion(m.rid,pid,slot,d), key=d+'|'+slot, locked=!!state.plan[d].locks[slot], pp=personById(pid);
-  const tag = m.leftover?`<div class="lo">↩ ${m.from} dinner${pt.v==='chicken'?' · chicken':''}</div>` : m.farali?`<div class="lo">farali · ${pp.label}</div>` : pt.v?`<div class="lo">${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])} · ${pp.label}</div>`:'';
-  const acts = m.fixed ? '' : `<div class="chip-act">${(!m.leftover&&!m.farali)?`<button class="lk ${locked?'on':''}" data-lock="${key}" title="${locked?'Unlock':'Lock so Generate keeps it'}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="x" data-remove="${key}" title="${m.leftover?'Cook a fresh lunch instead':'Remove'}" aria-label="Remove">×</button></div>`;
-  return `<div class="chip ${m.fixed?'fixed':''} ${m.leftover?'leftover':''} ${m.farali?'farali':''} ${locked?'locked':''}" ${m.fixed?'':'draggable="true"'} data-rid="${m.rid}" data-open="${m.rid}" data-ctx="${key}" style="--cat:${CATS[r.cat]};--sel:${pp.hex}">
+  const pt=portion(m.rid,pid,slot,d), key=d+'|'+slot, locked=isLocked(d,slot), pp=personById(pid), st=statusOf(d,slot,pid);
+  const tag = st?`<div class="lo st">${esc(statusLabel(st))}</div>` : m.weekly?`<div class="lo">weekly snack · made Sunday</div>` : m.leftover?`<div class="lo">↩ ${m.from} dinner${pt.v==='chicken'?' · chicken':''}</div>` : m.farali?`<div class="lo">farali · ${pp.label}</div>` : pt.v?`<div class="lo">${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])} · ${pp.label}</div>`:'';
+  const acts = m.fixed ? '' : `<div class="chip-act">${(!m.leftover&&!m.farali&&!(m.weekly&&d>0))?`<button class="lk ${locked?'on':''}" data-lock="${key}" title="${locked?'Unlock':'Lock so Generate keeps it'}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="x" data-remove="${key}" title="${m.leftover?'Cook a fresh lunch instead':'Remove'}" aria-label="Remove">×</button></div>`;
+  return `<div class="chip ${m.fixed?'fixed':''} ${m.leftover?'leftover':''} ${m.farali?'farali':''} ${m.weekly?'weekly':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" ${m.fixed?'':'draggable="true"'} data-rid="${m.rid}" data-open="${m.rid}" data-ctx="${key}" style="--cat:${CATS[r.cat]};--sel:${pp.hex}">
     ${tag}<div class="nm">${esc(shortName(r))}</div>
     <div class="mac"><b>${pt.kcal}</b> kcal · <b style="color:var(--pro)">${pt.p}g</b> P${pt.s!==1&&!m.fixed?` · ${niceCount(pt.s)}×`:''}</div>${acts}</div>`;
 }
 function renderCal(){
   const pid=selPerson, pp=person();
-  let h=`<div class="corner"></div>`+DAYS.map((d,i)=>`<div class="day-h ${i===TODAY_IDX?'is-today':''}">${d}<small>${DAYNOTE[i]||'&nbsp;'}</small></div>`).join('');
+  let h=`<div class="corner"></div>`+DAYS.map((d,i)=>`<div class="day-h ${i===TODAY_IDX?'is-today':''}">${d} <span class="dnum">${dayDate(i).split(' ')[1]}</span><small>${DAYNOTE[i]||'&nbsp;'}</small></div>`).join('');
   SLOTS.forEach(s=>{
     h+=`<div class="row-lbl">${s.label}</div>`;
     DAYS.forEach((_,d)=>{
       const m=mealFor(d,s.id,pid), key=d+'|'+s.id;
       let inner = m ? chipHtml(m,d,s.id,pid) : '';
-      if(!m && !s.fixed){
+      if(!m && s.id==='snack'){
+        inner = state.snack.rid ? `<span class="cell-empty">not in ${pp.label}’s snack box</span>` : `<span class="cell-empty">drop a snack-box recipe</span>`;
+      } else if(!m && !s.fixed){
         inner = (s.id==='lunch' && LEFTOVER_DAYS.includes(d) && state.plan[d].lunchFresh && !isFarali(pid,d))
           ? `<button class="use-lo" data-uselo="${d}">↩ use ${d===0?'Sunday':DAYS[d-1]} leftovers</button>` : `<span class="cell-empty">${armed?'tap to place':'drop a recipe'}</span>`;
       }
@@ -114,19 +143,19 @@ function renderCal(){
 }
 function renderQueue(){
   $('#qcount').textContent=state.queue.length;
-  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Empty — add recipes from the library, then drag or tap them onto a meal.</div>'; return; }
-  $('#qstrip').innerHTML=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=r.cat==='breakfast'?'breakfast':'dinner', pt=portion(rid,selPerson,slot);
+  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Nothing queued. Tap “Add to plan” on any recipe — Generate places queued recipes first, then fills the rest of the week.</div>'; return; }
+  $('#qstrip').innerHTML=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="q-chip ${armed&&armed.rid===rid&&armed.qi===i?'armed':''}" draggable="true" data-rid="${rid}" data-qi="${i}" style="--cat:${CATS[r.cat]}"><div><div class="qn">${esc(shortName(r))}</div><div class="qm">${pt.kcal} kcal · ${pt.p}g P · ${person().label}</div></div><button data-deq="${i}" title="Remove from queue" aria-label="Remove from queue">×</button></div>`;
   }).join('');
 }
-const LIB_FILTERS=[['all','all'],['breakfast','breakfast'],['main','lunch & dinner'],['chicken','chicken'],['pcod','PCOD-friendly'],['farali','farali']];
+const LIB_FILTERS=[['all','all'],['breakfast','breakfast'],['main','lunch & dinner'],['snack','snack box'],['chicken','chicken'],['pcod','PCOD-friendly'],['farali','farali']];
 const libRecipes=()=>RECIPES.filter(r=>!r.fixed);
 const cuisineList=()=>['all',...[...new Set(libRecipes().map(r=>r.cuisine).filter(Boolean))].sort()];
 function matches(r){
   if(filter==='farali' && !r.farali) return false;
   if(filter==='chicken' && !r.protein) return false;
   if(filter==='pcod' && !isPcodFriendly(r)) return false;
-  if((filter==='breakfast'||filter==='main') && r.cat!==filter) return false;
+  if((filter==='breakfast'||filter==='main'||filter==='snack') && r.cat!==filter) return false;
   if(cuisine!=='all' && r.cuisine!==cuisine) return false;
   if(!query) return true;
   const hay=(r.name+' '+r.tags.join(' ')+' '+r.upgrade+' '+r.cuisine+' '+recipeIng(r,'veg').concat(r.protein?[r.protein.chicken]:[]).map(i=>(FOODS[i[0]]||{}).name).join(' ')).toLowerCase();
@@ -150,7 +179,7 @@ function renderLib(){
   $('#libcount').textContent=list.length+' of '+all.length+' recipes';
   if(!list.length){ $('#lib').innerHTML=`<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`; return; }
   $('#lib').innerHTML=list.map(r=>{
-    const slot=r.cat==='breakfast'?'breakfast':'dinner', pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
+    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
     const cols=PEOPLE.map(p=>{ const q=portion(r.id,p.id,slot,null); return `<div class="pcol ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="who"><i></i>${p.label}<small>${niceCount(q.s)}×</small></div><div class="serve">${esc(serveText(r,q.s,q.v))}</div><div class="nums"><span class="kc">${q.kcal}</span><span class="pr">${q.p}g P</span></div></div>`; }).join('');
     return `<article class="rc" draggable="true" data-rid="${r.id}" style="--cat:${CATS[r.cat]}">
       <div class="top"><div class="name">${esc(r.name)}</div><div class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}${r.custom?' · custom':''}</div></div>
@@ -159,7 +188,7 @@ function renderLib(){
       <div class="macro-wrap"><div class="macro-label"><span>Macros — <b>${person().label}</b> portion</span><span><b>${pt.kcal}</b> kcal</span></div>${macroBar(pt)}
         <div class="macro-key"><span><i style="background:var(--pro)"></i>P ${pt.p}g</span><span><i style="background:var(--carb)"></i>C ${pt.c}g</span><span><i style="background:var(--fat)"></i>F ${pt.f}g</span></div></div>
       <div class="portions"><div class="ph">Portions · ${slot}</div><div class="ptable">${cols}</div></div>
-      <button class="addq ${inQ?'added':''}" data-addq="${r.id}">${inQ?'✓ In queue':'+ Add to queue'}</button>
+      <button class="addq ${inQ?'added':''}" data-addq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button>
     </article>`;
   }).join('');
 }
@@ -180,25 +209,30 @@ function openDrawer(rid,ctxKey,keep){
   const ctx=ctxKey?parseCtx(ctxKey):null;
   drawerView={t:'recipe',rid,ctx:ctxKey};
   const n=nutritionOf(r);
-  const slot = ctx? ctx.slot : (r.cat==='breakfast'?'breakfast':r.fixed?r.cat:'dinner');
+  const slot = ctx? ctx.slot : (r.fixed?r.cat:defSlot(r));
   let m=null, batch=null, batchNote='';
   if(ctx){
     m=mealFor(ctx.d,ctx.slot,selPerson);
-    if(m&&m.farali) batch=faraliBatch(ctx.slot);
+    if(m&&m.weekly) batch=snackBatch();
+    else if(m&&m.farali) batch=faraliBatch(ctx.slot);
     else if(m&&m.leftover){ const srcDay=(ctx.d+6)%7; batch=ctx.d===0?null:batchFor(srcDay,'dinner'); batchNote=`Cooked ${ctx.d===0?'last Sunday':FULLDAY[srcDay]} night as part of the dinner batch.`; }
     else if(m&&!m.fixed) batch=batchFor(ctx.d,ctx.slot);
   }
   let servings, ingTitle, ingSub='';
   if(r.fixed){ servings=1; ingTitle='Per person'; }
+  else if(r.cat==='snack' && !batch){ const eat=state.snack.eaters.length||1; batch={parts:[].concat(...state.snack.eaters.map(pid=>DAYS.map((_,d)=>({pid,day:d,slot:'snack',s:1})))),servings:7*eat}; servings=batch.servings; ingTitle=`Sunday batch · ${servings} servings`; ingSub=`<div>One serving a day for ${state.snack.eaters.map(id=>personById(id).label).join(', ')||'—'}. Keeps ${esc(r.keeps||'a week')}.</div>`; }
+  else if(batch && batch.slot==='snack'){ servings=batch.servings; ingTitle=`Sunday batch · ${servings} servings`; ingSub=`<div>One a day for ${state.snack.eaters.map(id=>personById(id).label).join(', ')} (skipped days left out). Keeps ${esc(r.keeps||'a week')}.</div>`; }
   else if(batch){ servings=batch.servings; ingTitle=`Family batch · ${niceCount(servings)} servings`; ingSub=batchSummary(batch); }
   else { servings=PEOPLE.reduce((a,p)=>a+servingsFor(r,p.id,slot),0); ingTitle=`Family batch · ${niceCount(servings)} servings`; ingSub=`<div>One ${slot==='breakfast'?'breakfast':'meal'} for all three. Weekday dinners also cook tomorrow’s lunch.</div>`; }
   const parts = r.fixed ? [{pid:selPerson,day:null,s:1}] : batch ? batch.parts : genericParts(r,slot);
   const ings = r.custom ? (r.ingText||[]).map(t=>`<li><span>${esc(t)}</span></li>`).join('') : batchIngredients(r,parts).map(ingLine).join('');
-  const locked = ctx && state.plan[ctx.d].locks[ctx.slot];
-  const slotActs = ctx && m && !m.fixed ? `<div class="slot-acts">
-      <button class="m-btn ghost" data-dswap="${ctxKey}">${ICON.swap} Swap</button>
-      ${!m.leftover&&!m.farali?`<button class="m-btn ghost ${locked?'added':''}" data-dlock="${ctxKey}">${locked?ICON.lock+' Locked':ICON.unlock+' Lock'}</button>`:''}
-      <button class="m-btn ghost" data-dremove="${ctxKey}">${m.leftover?'Cook fresh instead':'Remove'}</button></div>` : '';
+  const locked = ctx && isLocked(ctx.d,ctx.slot);
+  const st = ctx && statusOf(ctx.d,ctx.slot,selPerson);
+  const slotActs = ctx && m ? `<div class="slot-acts">
+      ${!m.fixed?`<button class="m-btn ghost" data-dswap="${ctxKey}">${ICON.swap} Swap</button>`:''}
+      ${!m.fixed&&!m.leftover&&!m.farali?`<button class="m-btn ghost ${locked?'added':''}" data-dlock="${ctxKey}">${locked?ICON.lock+' Locked':ICON.unlock+' Lock'}</button>`:''}
+      <button class="m-btn ghost ${st?'added':''}" data-dstatus="${ctxKey}">${ICON.check} ${st?esc(statusLabel(st)):'Mark eaten / skipped'}</button>
+      ${!m.fixed?`<button class="m-btn ghost" data-dremove="${ctxKey}">${m.leftover?'Cook fresh instead':'Remove'}</button>`:''}</div>` : '';
   const dd = ctx ? (m&&m.leftover ? ctx.d : ctx.d) : null;
   const pp=PEOPLE.map(p=>{ const q=portion(rid,p.id,slot,dd); return `<div class="dp ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="dp-h"><span class="who"><i></i>${p.label} <small>${niceCount(q.s)} serving${q.s===1?'':'s'}${q.v?' · '+(q.v==='chicken'?'chicken':esc(r.protein.veg[3])):''}</small></span><span class="dp-k">${q.kcal} kcal · <b>${q.p}g P</b></span></div><div class="dp-serve">${esc(serveText(r,q.s,q.v))}</div>${macroBar(q)}</div>`; }).join('');
   const nv=r.protein?nutritionOf(r,'chicken'):null;
@@ -210,7 +244,8 @@ function openDrawer(rid,ctxKey,keep){
     <div class="badges">${recipeBadges(r)}</div>
     ${r.protein?`<p class="pf-note">Shared base: one gravy, split into two pots — chicken for Akshar &amp; Aum, ${esc(r.protein.veg[3])} for Dvija. On Thursdays and Saturdays everyone gets ${esc(r.protein.veg[3])}.</p>`:''}
     ${slotActs}
-    ${!ctx&&!r.fixed?`<div class="m-actions"><button class="m-btn ghost ${state.queue.includes(rid)?'added':''}" data-dq="${rid}">${state.queue.includes(rid)?'✓ Queued':'+ Queue'}</button><button class="m-btn" data-dplan="${rid}">Add to plan</button></div>`:''}
+    ${!ctx&&!r.fixed?`<div class="slot-acts"><button class="m-btn ${state.queue.includes(rid)?'ghost added':''}" data-dq="${rid}">${state.queue.includes(rid)?'✓ Queued for Generate':'+ Add to plan'}</button></div>`:''}
+    ${r.cat==='snack'?`<div class="pf-set snack-who"><span>Snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>`:''}
     <div class="upgrade"><span class="lift">Upgrade</span><span>${esc(r.upgrade)}</span></div>
     <div class="d-sec"><h3>Portions <small>${r.fixed?'fixed daily':SLOT_LABEL[slot].toLowerCase()+' budget'}</small></h3><div class="d-portions">${pp}</div>
       <p class="pf-note">1 serving ≈ ${Math.round(n.kcal)} kcal · ${Math.round(n.p)}g P · ${Math.round(n.c)}g C · ${Math.round(n.f)}g F · ${Math.round(n.fib)}g fibre${nv?` (with chicken: ${Math.round(nv.kcal)} kcal · ${Math.round(nv.p)}g P)`:''}${r.protein?' — veg version':''}</p></div>
@@ -354,12 +389,12 @@ function renderMDiscover(){
   $('#mLibCount').textContent=list.length+' of '+all.length;
   if(!list.length){ $('#mLib').innerHTML=`<div class="m-empty">No recipes match “${esc(query)}”.</div>`; return; }
   $('#mLib').innerHTML=list.map(r=>{
-    const slot=r.cat==='breakfast'?'breakfast':'dinner', pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
+    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
     return `<article class="m-card" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${r.id}">
         <span class="top"><span class="name">${esc(r.name)}</span><span class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}</span></span>
         <span class="m-upg">${esc(r.cuisine?r.cuisine+' · ':'')}${esc(r.upgrade)}</span>
         <span class="m-mac"><span><b>${pt.kcal}</b> kcal · ${pp.label} ${niceCount(pt.s)}×</span><span><b style="color:var(--pro)">P ${pt.p}g</b> · C ${pt.c} · F ${pt.f}</span></span>${macroBar(pt)}<span class="badges">${recipeBadges(r)}</span></button>
-      <div class="m-card-actions"><button class="m-btn ghost ${inQ?'added':''}" data-mq="${r.id}">${inQ?'✓ Queued':'+ Queue'}</button><button class="m-btn" data-plan="${r.id}">Add to plan</button></div></article>`;
+      <div class="m-card-actions"><button class="m-btn ${inQ?'ghost added':''}" data-mq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button></div></article>`;
   }).join('');
 }
 function renderMToday(dir){
@@ -371,43 +406,48 @@ function renderMToday(dir){
   const rows=SLOTS.map(s=>{
     const m=mealFor(mDay,s.id,pid), key=mDay+'|'+s.id;
     let body;
-    if(m){ const r=rec(m.rid), pt=portion(m.rid,pid,s.id,mDay), locked=!!state.plan[mDay].locks[s.id];
+    if(!m && s.id==='snack') return '';
+    if(m){ const r=rec(m.rid), pt=portion(m.rid,pid,s.id,mDay), locked=isLocked(mDay,s.id), st=statusOf(mDay,s.id,pid);
       const vtag=pt.v?` · ${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])}`:'';
-      const badge=m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo fixed">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
-      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''}" style="--cat:${CATS[r.cat]}">
+      const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo fixed">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo fixed">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
+      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" style="--cat:${CATS[r.cat]}">
         <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(r.name)}</span><span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
-        ${m.fixed?'':`<div class="m-acts"><button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="m-ic" data-mremove="${key}" aria-label="${m.leftover?'Cook fresh instead':'Remove'}">×</button></div>`}
+        <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
       </div>`;
     } else {
       const canLo = s.id==='lunch' && LEFTOVER_DAYS.includes(mDay) && state.plan[mDay].lunchFresh && !isFarali(pid,mDay);
       body=`<div class="m-empty-row"><button class="m-add" data-slot="${key}">+ Add ${s.label.toLowerCase()}</button>${canLo?`<button class="m-add lo" data-uselo="${mDay}">↩ Use ${mDay===0?'Sunday':DAYS[mDay-1]} leftovers</button>`:''}</div>`;
     }
-    const kc=m?portion(m.rid,pid,s.id,mDay).kcal:0;
+    const st0=m&&statusOf(mDay,s.id,pid);
+    const kc=!m?0: st0==='skip'?0 : st0?outEstimate(mDay,s.id,pid,st0) : portion(m.rid,pid,s.id,mDay).kcal;
     return `<div class="m-meal"><div class="m-meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
   }).join('');
   const dinnerBatch=batchFor(mDay,'dinner');
   const cookNote = dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? `<p class="m-cook">Tonight: cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))} — includes ${FULLDAY[nextDay(mDay)]}’s lunch.</p>` : '';
+  const snackR=rec(state.snack.rid);
+  const snackNote = mDay===0 && snackR ? `<p class="m-cook">Snack box this week: ${esc(snackR.name)} — prep ${snackBatch()?snackBatch().servings:0} servings on Sunday (keeps ${esc(snackR.keeps||'a week')}).</p>` : '';
   const faraliNote = mDay===FARALI.day && pid!==FARALI.pid ? `<p class="m-cook">Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'—')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'—')} for dinner.</p>`:'';
   $('#mToday').innerHTML=`
     <div class="m-days" style="--sel:${pp.hex}">${days}</div>
     <div class="m-daybody ${dir?'m-anim':''}" style="--dx:${(dir||0)*28}px">
-      <div class="m-dayhead"><div><div class="d-ctx">${mDay===TODAY_IDX?'Today':'This week'}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}</div><h2 class="m-h2">${FULLDAY[mDay]}</h2></div>
+      <div class="m-dayhead"><div><div class="d-ctx">${mDay===TODAY_IDX?'Today':dayDate(mDay)}${mDay===TODAY_IDX?' · '+dayDate(mDay):''}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}</div><h2 class="m-h2">${FULLDAY[mDay]}</h2></div>
         <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
       <div class="m-sum">
         <div class="m-sum-top"><div><span class="big ${over?'over':''}">${t.kcal.toLocaleString()}</span><span class="of">/ ${pp.target.toLocaleString()} kcal · ${pp.label}</span></div><span class="pct">${pct}%</span></div>
         <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${Math.min(100,pct)}%"></span></div>
         <div class="m-stats">${stat('Protein',t.p,g.p,'var(--pro)')}${stat('Carbs',t.c,g.c,'var(--carb)')}${stat('Fat',t.f,g.f,'var(--fat)')}</div>
       </div>
-      ${cookNote}${faraliNote}${rows}
+      ${cookNote}${snackNote}${faraliNote}${rows}
     </div>
-    <div class="m-foot"><button class="btn-ghost" id="mReset">↺ Reset week to plan</button></div>`;
+    <div class="m-foot"><button class="btn-solid" data-gen>${ICON.spark} Generate</button><button class="btn-ghost" id="mReset">↺ Starter plan</button></div>`;
 }
 function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery list</h2></div>${groceryHTML('m')}`; }
 function renderMQueue(){
-  const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=r.cat==='breakfast'?'breakfast':'dinner', pt=portion(rid,selPerson,slot);
+  const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="m-item" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'farali':CAT_LABEL[r.cat]} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
-    <p class="m-sub">Recipes you've shortlisted. Place each one into a day and meal.</p>
+    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week — 1–2 chicken nights, reheatable Sun–Thu dinners, no recipe more than twice.</p>
+    <button class="btn-solid wide gen-big" data-gen>${ICON.spark} Generate plan</button>
     ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Your queue is empty. Browse recipes and tap <b>+ Queue</b> to stage them here.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
 }
 
@@ -421,6 +461,7 @@ function openSheet(ctx,title,html){
 function closeSheet(){ const s=$('#sheet'); s.classList.remove('open'); s.setAttribute('aria-hidden','true'); $('#sheetScrim').classList.remove('show'); sheetState=null; }
 function openPlacePicker(rid){
   const r=rec(rid); if(!r) return;
+  if(r.cat==='snack'){ setMealView(0,'snack',rid); state.queue=state.queue.filter(x=>x!==rid); return commit(); }
   sheetState={t:'place',rid,d:mDay,m: r.cat==='breakfast'?'breakfast':'dinner'};
   renderPlacePicker();
 }
@@ -447,7 +488,7 @@ function openSlotPicker(key){
   renderSlotList();
 }
 function renderSlotList(){
-  const s=sheetState, cat=s.slot==='breakfast'?'breakfast':'main', q=s.q.toLowerCase();
+  const s=sheetState, cat=s.slot==='breakfast'?'breakfast':s.slot==='snack'?'snack':'main', q=s.q.toLowerCase();
   const fits=r=>!r.fixed && (s.far ? r.farali : r.cat===cat) && (!q||(r.name+' '+r.tags.join(' ')+' '+r.cuisine).toLowerCase().includes(q));
   const pslot=s.slot;
   const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}" style="--cat:${CATS[r.cat]}"><span class="tx"><span class="nm">${esc(r.name)}</span><span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
@@ -642,3 +683,66 @@ Sync.onChange(s=>{
 });
 renderFilters(); renderEverything();
 Sync.init();
+
+/* ================= generate + status sheets ================= */
+function openGenerateSheet(){
+  sheetState={t:'gen'};
+  const restOk=TODAY_IDX<6;
+  const q=state.queue.length;
+  openSheet(`Week of ${dayDate(0)}`,'Generate the plan',`
+    <p class="m-sub">${q?`<b>${q} queued recipe${q>1?'s':''}</b> go in first. `:''}Then the library fills the gaps: 1–2 chicken nights (never Thu/Sat), reheatable Sun–Thu dinners for leftover lunches, Aum’s farali Thursday, no recipe more than twice, and a weekly snack box. Locked meals stay put.</p>
+    <div class="gen-opts">
+      ${restOk?`<button class="gen-opt" data-genmode="rest"><b>Rest of this week</b><small>${FULLDAY[TODAY_IDX+1]} → Sunday · keeps today and earlier</small></button>`:''}
+      <button class="gen-opt" data-genmode="week"><b>Whole week</b><small>Mon ${dayDate(0).split(' ')[1]} → Sun ${dayDate(6).split(' ')[1]} · new snack box</small></button>
+      <button class="gen-opt" data-genmode="next"><b>Start next week now</b><small>Archives this week; Sunday’s dinner becomes Monday’s lunch. Happens automatically Sunday 9 pm.</small></button>
+    </div>`);
+}
+function openStatusSheet(key){
+  const {d,slot}=parseCtx(key);
+  const eaters = slot==='snack' ? state.snack.eaters.slice() : (slot==='drink'||slot==='shake') ? PEOPLE.map(p=>p.id) : PEOPLE.map(p=>p.id).filter(pid=>mealFor(d,slot,pid));
+  sheetState={t:'status',d,slot,who:new Set([eaters.includes(selPerson)?selPerson:eaters[0]]),eaters};
+  renderStatusSheet();
+}
+function renderStatusSheet(){
+  const s=sheetState, who=[...s.who], cur=who.length===1?statusOf(s.d,s.slot,who[0]):null;
+  const est=v=>who.length?outEstimate(s.d,s.slot,who[0],v):0;
+  openSheet(`${FULLDAY[s.d]} · ${SLOT_LABEL[s.slot]}`,'How did this meal go?',`
+    <div class="sh-lbl">Who</div>
+    <div class="opt-grid who">${s.eaters.map(pid=>`<button class="opt ${s.who.has(pid)?'active':''}" data-swho="${pid}" aria-pressed="${s.who.has(pid)}">${personById(pid).label}</button>`).join('')}</div>
+    <div class="sh-lbl">Status</div>
+    <div class="gen-opts">
+      <button class="gen-opt ${!cur?'on':''}" data-sset=""><b>Eaten as planned</b><small>Counts the planned portion</small></button>
+      <button class="gen-opt ${cur==='skip'?'on':''}" data-sset="skip"><b>Skipped</b><small>Counts 0 kcal; left out of the cooking batch and grocery list</small></button>
+      ${OUT_OPTS.map(([v,l])=>`<button class="gen-opt ${cur===v?'on':''}" data-sset="${v}"><b>Ate out / ordered in · ${l.toLowerCase()}</b><small>Counts ~${est(v)} kcal${who.length>1?' each':''} (estimate)</small></button>`).join('')}
+    </div>`);
+}
+$('#sheet').addEventListener('click',e=>{
+  const q=s=>e.target.closest(s); let b;
+  if(!sheetState) return;
+  if(sheetState.t==='gen' && (b=q('[data-genmode]'))){ const m=b.dataset.genmode; closeSheet(); return runGenerate(m); }
+  if(sheetState.t==='status'){
+    if(b=q('[data-swho]')){ const id=b.dataset.swho; if(sheetState.who.has(id)&&sheetState.who.size>1) sheetState.who.delete(id); else sheetState.who.add(id); return renderStatusSheet(); }
+    if(b=q('[data-sset]')){ const {d,slot,who}=sheetState; closeSheet(); return applyStatus(d,slot,[...who],b.dataset.sset||null); }
+  }
+});
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-gen]'); if(g){ e.preventDefault(); openGenerateSheet(); return; }
+  const st=e.target.closest('[data-mstatus],[data-dstatus]'); if(st){ openStatusSheet(st.dataset.mstatus||st.dataset.dstatus); return; }
+  const se=e.target.closest('[data-snackeater]'); if(se){ const id=se.dataset.snackeater, ea=state.snack.eaters;
+    if(ea.includes(id)){ if(ea.length>1) state.snack.eaters=ea.filter(x=>x!==id); else return toast('At least one person needs the snack box'); } else ea.push(id);
+    return commit(); }
+});
+// weekly refresh: run once the shared plan is loaded (or we know we're local-only), and keep checking while open
+let rolledChecked=false;
+function maybeRollover(){
+  if(rolledChecked) return; rolledChecked=true;
+  const sum=rolloverIfNeeded();
+  TODAY_IDX=todayIndex(); mDay=TODAY_IDX;
+  if(sum){ saveState(); toast(`New week planned · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}`); }
+  renderEverything();
+}
+Sync.onChange(s=>{ if(['synced','local','denied','error','offline'].includes(s.status)) maybeRollover(); });
+setInterval(()=>{ if(activeWeekStart()>state.weekStart){ rolledChecked=false; maybeRollover(); } else if(todayIndex()!==TODAY_IDX){ TODAY_IDX=todayIndex(); renderEverything(); } }, 10*60*1000);
+
+// local-only visitors (or Firebase unavailable): don't wait for a sync that will never come
+setTimeout(()=>{ if(!Sync.user) maybeRollover(); },3000);

@@ -555,3 +555,25 @@
   .ing-who{display:block;font-family:"IBM Plex Mono";font-size:10px;color:var(--ink-soft)}
   .search input[type=text]{padding-left:36px}
   .m-chips.cuisines{margin:-6px -16px 14px}
+  /* phase 4: generate, status, snack box */
+  .day-h .dnum{font-family:"IBM Plex Mono";font-weight:400;font-size:11px;color:var(--ink-soft)}
+  .sec-head #weekLabel{white-space:nowrap}
+  .chip.weekly{border-left-color:var(--olive)}
+  .chip .lo.st{color:var(--ink-soft)}
+  .chip.st-skip .nm,.chip.st-skip .mac{text-decoration:line-through;opacity:.55}
+  .chip.st-out{background:#F3EDE2}
+  .m-item.st-skip .nm,.m-item.st-skip .meta{text-decoration:line-through;opacity:.55}
+  .m-item.st-out{background:#F7F1E6}
+  .m-badge-lo.st{color:var(--ink-soft)}
+  .gen-opts{display:grid;gap:8px;margin-top:12px}
+  .gen-opt{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;width:100%;background:#fff;border:1.5px solid var(--line-2);border-radius:10px;padding:12px 14px;cursor:pointer;font:inherit;color:var(--ink)}
+  .gen-opt b{font-size:14.5px}
+  .gen-opt small{font-size:12px;color:var(--ink-soft);line-height:1.35}
+  .gen-opt:hover,.gen-opt.on{border-color:var(--ink);box-shadow:0 0 0 1.5px var(--ink)}
+  .opt-grid.who{grid-template-columns:repeat(3,1fr)}
+  .gen-big{display:flex;align-items:center;justify-content:center;gap:8px;margin:14px 0 4px}
+  .gen-big svg,.m-foot .btn-solid svg{width:18px;height:18px}
+  .m-foot{gap:10px;flex-wrap:wrap}
+  .m-foot .btn-solid{display:inline-flex;align-items:center;gap:7px}
+  .snack-who{margin:0 0 14px}
+  .snack-who .seg button{font-size:12px;padding:6px 10px}

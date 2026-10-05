@@ -34,6 +34,7 @@ const SLOTS=[
   {id:'breakfast', label:'Breakfast'},
   {id:'shake',     label:'Protein shake', fixed:true},
   {id:'lunch',     label:'Lunch'},
+  {id:'snack',     label:'Weekly snack', weekly:true},
   {id:'dinner',    label:'Dinner'},
 ];
 const MEAL_SLOTS=['breakfast','lunch','dinner'];
@@ -42,8 +43,8 @@ const SPLIT={breakfast:.36, lunch:.30, dinner:.34};     // share of what's left 
 const LEFTOVER_DAYS=[0,1,2,3,4];                         // Mon–Fri lunch = previous night's dinner
 const FARALI={pid:'m2', day:3};                          // Aum eats farali lunch + dinner on Thursday
 const DAYNOTE=['','','','Farali · Aum','','','Cook for Mon lunch'];
-const CATS={breakfast:'#B27E23', main:'#BE5630', drink:'#2E6E7E', shake:'#2E6E7E'};
-const CAT_LABEL={breakfast:'breakfast', main:'lunch & dinner', drink:'daily', shake:'daily'};
+const CATS={breakfast:'#B27E23', main:'#BE5630', drink:'#2E6E7E', shake:'#2E6E7E', snack:'#5C6A43'};
+const CAT_LABEL={breakfast:'breakfast', main:'lunch & dinner', drink:'daily', shake:'daily', snack:'weekly snack'};
 
 /* ================= protein variants (shared-base chicken dishes) ================= */
 const CHICKEN_EATERS=['m1','m2'];           // Akshar & Aum eat chicken; Dvija is vegetarian
@@ -75,11 +76,13 @@ function isPcodFriendly(r){                 // high fibre + high protein + whole
 }
 const scaleN=(n,s)=>{ const o={}; NKEYS.forEach(k=>o[k]=n[k]*s); o.known=n.known; return o; };
 function fixedKcal(pid){ return nutritionOf(rec(FIXED.drink[pid])).kcal + nutritionOf(rec(FIXED.shake[pid])).kcal; }
-function slotBudget(pid,slot){ const p=personById(pid); return (p.target - fixedKcal(pid)) * SPLIT[slot]; }
+// the weekly snack box: one recipe, one serving a day for each person in `eaters`
+function snackKcal(pid){ const sn=state.snack; if(!sn||!sn.rid||!sn.eaters.includes(pid)) return 0; const r=rec(sn.rid); return r?nutritionOf(r).kcal:0; }
+function slotBudget(pid,slot){ const p=personById(pid); return (p.target - fixedKcal(pid) - snackKcal(pid)) * (SPLIT[slot]||0); }
 // servings of recipe r for person pid in slot (quarter-serving steps)
 function servingsFor(r,pid,slot,d){
   if(!r) return 0;
-  if(r.fixed) return 1;
+  if(r.fixed || r.cat==='snack') return 1;
   const s = slotBudget(pid,slot) / (nutritionOf(r,variantFor(r,pid,d)).kcal||1);
   return Math.min(4, Math.max(0.5, Math.round(s*4)/4));
 }
@@ -111,6 +114,21 @@ function serveText(r,servings,variant){
   }).join(' · ');
 }
 
+/* ================= weeks ================= */
+const ROLL_HOUR=21;                          // Sunday 9 pm: next week becomes the active week
+const isoDate=x=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`;
+function mondayOf(dt){ const x=new Date(dt); x.setHours(0,0,0,0); x.setDate(x.getDate()-(x.getDay()+6)%7); return x; }
+const addDaysIso=(iso,n)=>{ const [y,m,d]=iso.split('-').map(Number); return isoDate(new Date(y,m-1,d+n)); };
+const weeksBetween=(a,b)=>{ const [y1,m1,d1]=a.split('-').map(Number), [y2,m2,d2]=b.split('-').map(Number); return Math.round((new Date(y2,m2-1,d2)-new Date(y1,m1-1,d1))/6048e5); };
+function activeWeekStart(now=new Date()){
+  const m=mondayOf(now); if(now.getDay()===0 && now.getHours()>=ROLL_HOUR) m.setDate(m.getDate()+7);
+  return isoDate(m);
+}
+// index of "today" inside the active week (Sunday night shows tomorrow = Monday)
+function todayIndex(now=new Date()){ return activeWeekStart(now)===isoDate(mondayOf(now)) ? (now.getDay()+6)%7 : 0; }
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function dayDate(d){ const [y,m,dd]=addDaysIso(state.weekStart,d).split('-').map(Number); return `${MONTHS[m-1]} ${dd}`; }
+
 /* ================= state ================= */
 const store=(()=>{ let mem={}, ok=false;
   try{ const k='__t'+Date.now(); localStorage.setItem(k,'1'); localStorage.removeItem(k); ok=true; }catch(e){}
@@ -128,7 +146,8 @@ function seedState(){
   DAYS.forEach((_,d)=>{ plan[d]=emptyDay(); plan[d].breakfast=B[d]; plan[d].dinner=D[d]; });
   plan[0].lunchFresh=true; plan[0].lunch='dalrice';     // first week: no Sunday leftovers yet
   plan[5].lunch='khichdi'; plan[6].lunch='misal';        // weekend lunches are fresh
-  return {v:3, plan, farali:{lunch:'sabudana',dinner:'samo'}, prevSunDinner:null, queue:[], custom:[], grocery:{}, updatedAt:0};
+  return {v:3, weekStart:activeWeekStart(), plan, farali:{lunch:'sabudana',dinner:'samo'}, snack:{rid:'seedcookie',eaters:['m3'],locked:false},
+    prevSunDinner:null, queue:[], custom:[], grocery:{}, log:{}, history:[], updatedAt:0};
 }
 function migrateOld(){                       // from the v2 (single-file) planner
   const old=store.get('mp_plan'); if(!old) return null;
@@ -145,8 +164,11 @@ function migrateOld(){                       // from the v2 (single-file) planne
 function normalize(st){
   st.plan=st.plan||{}; DAYS.forEach((_,d)=>{ st.plan[d]=Object.assign(emptyDay(),st.plan[d]||{}); st.plan[d].locks=st.plan[d].locks||{}; });
   st.farali=Object.assign({lunch:null,dinner:null},st.farali||{});
-  ['queue','custom'].forEach(k=>st[k]=Array.isArray(st[k])?st[k]:[]);
-  st.grocery=st.grocery||{};
+  st.snack=Object.assign({rid:'seedcookie',eaters:['m3'],locked:false},st.snack||{});
+  if(!Array.isArray(st.snack.eaters)) st.snack.eaters=['m3'];
+  ['queue','custom','history'].forEach(k=>st[k]=Array.isArray(st[k])?st[k]:[]);
+  st.grocery=st.grocery||{}; st.log=st.log||{};
+  st.weekStart=st.weekStart||activeWeekStart();
   return st;
 }
 let state = normalize(store.get(STATE_KEY) || migrateOld() || seedState());
@@ -173,6 +195,7 @@ const nextDay=d=>(d+1)%7;
 function mealFor(d,slot,pid){
   const day=state.plan[d];
   if(slot==='drink'||slot==='shake') return {rid:FIXED[slot][pid||'m1'], fixed:true};
+  if(slot==='snack'){ const sn=state.snack; if(!sn.rid || (pid && !sn.eaters.includes(pid))) return null; return {rid:sn.rid, weekly:true}; }
   if(pid && (slot==='lunch'||slot==='dinner') && isFarali(pid,d)) return state.farali[slot] ? {rid:state.farali[slot], farali:true} : null;
   if(slot==='lunch' && LEFTOVER_DAYS.includes(d) && !day.lunchFresh){
     const src = d===0 ? state.prevSunDinner : state.plan[d-1].dinner;
@@ -184,27 +207,53 @@ const isLeftoverLunch=d=>LEFTOVER_DAYS.includes(d) && !state.plan[d].lunchFresh;
 // who eats the family meal in a slot on day d
 const eatersOf=(d,slot)=>PEOPLE.filter(p=>!(isFarali(p.id,d)&&(slot==='lunch'||slot==='dinner'))).map(p=>p.id);
 
-// one cooking session: recipe + everyone's servings (dinner includes tomorrow's leftover lunch)
+/* skipped / ate-out log (per person, per meal, this week) */
+const OUT_OPTS=[['out-light','Light',0.8],['out-usual','Usual',1.2],['out-heavy','Heavy',1.6]];
+const logKey=(d,slot,pid)=>`${d}-${slot}-${pid}`;
+const statusOf=(d,slot,pid)=>(state.log||{})[logKey(d,slot,pid)]||null;
+function setStatus(d,slot,pid,v){ const k=logKey(d,slot,pid); if(v) state.log[k]=v; else delete state.log[k]; }
+const statusLabel=v=>!v?'As planned':v==='skip'?'Skipped':'Ate out · '+OUT_OPTS.find(o=>o[0]===v)[1].toLowerCase();
+function outEstimate(d,slot,pid,v){
+  const f=(OUT_OPTS.find(o=>o[0]===v)||[,,1.2])[2];
+  let base=SPLIT[slot]?slotBudget(pid,slot):0;
+  if(!base){ const m=mealFor(d,slot,pid); const pt=m&&portion(m.rid,pid,slot,d); base=pt?pt.kcal:300; }
+  return Math.round(base*f);
+}
+const partAway=p=>!!statusOf(p.day,p.slot,p.pid);
+
+// one cooking session: recipe + everyone's servings (dinner includes tomorrow's leftover lunch).
+// Anyone marked skipped / ate out for that meal is left out of the batch.
 function batchFor(d,slot){
-  const m=mealFor(d,slot); if(!m||m.leftover||m.fixed) return null;
+  const m=mealFor(d,slot); if(!m||m.leftover||m.fixed||m.weekly) return null;
   const r=rec(m.rid);
   const parts=eatersOf(d,slot).map(pid=>({pid,day:d,slot,s:servingsFor(r,pid,slot,d)}));
   if(slot==='dinner'){
     const n=nextDay(d);
     const nextIsLeftover = d===6 ? true : isLeftoverLunch(n);   // Sunday dinner feeds next Monday
-    if(nextIsLeftover) eatersOf(n,'lunch').forEach(pid=>parts.push({pid,day:n,slot:'lunch',s:servingsFor(r,pid,'lunch',n),leftover:true}));
+    if(nextIsLeftover) eatersOf(n,'lunch').forEach(pid=>parts.push({pid,day:n,slot:'lunch',s:servingsFor(r,pid,'lunch',n),leftover:true,nextWeek:d===6}));
   }
-  return {rid:m.rid, d, slot, parts, servings:parts.reduce((a,p)=>a+p.s,0)};
+  const kept=parts.filter(p=>p.nextWeek||!partAway(p));
+  if(!kept.length) return null;
+  return {rid:m.rid, d, slot, parts:kept, servings:kept.reduce((a,p)=>a+p.s,0)};
+}
+function snackBatch(){
+  const sn=state.snack, r=rec(sn.rid); if(!r) return null;
+  const parts=[]; sn.eaters.forEach(pid=>DAYS.forEach((_,d)=>{ const p={pid,day:d,slot:'snack',s:1}; if(!partAway(p)) parts.push(p); }));
+  if(!parts.length) return null;
+  return {rid:sn.rid, d:6, slot:'snack', weekly:true, parts, servings:parts.length};
 }
 function faraliBatch(slot){
   const rid=state.farali[slot]; if(!rid) return null;
-  return {rid, d:FARALI.day, slot, farali:true, parts:[{pid:FARALI.pid,day:FARALI.day,slot,s:servingsFor(rec(rid),FARALI.pid,slot,FARALI.day)}], get servings(){return this.parts[0].s;}};
+  const part={pid:FARALI.pid,day:FARALI.day,slot,s:servingsFor(rec(rid),FARALI.pid,slot,FARALI.day)};
+  if(partAway(part)) return null;
+  return {rid, d:FARALI.day, slot, farali:true, parts:[part], servings:part.s};
 }
 // every cooking session this week (what the grocery list is built from)
 function weekBatches(){
   const out=[];
   DAYS.forEach((_,d)=>MEAL_SLOTS.forEach(slot=>{ const b=batchFor(d,slot); if(b) out.push(b); }));
   ['lunch','dinner'].forEach(s=>{ const b=faraliBatch(s); if(b) out.push(b); });
+  const sb=snackBatch(); if(sb) out.push(sb);
   return out;
 }
 // ingredients for a set of portions [{pid,day,s}] — each part uses that person's protein for that day
@@ -220,9 +269,12 @@ const genericParts=(r,slot)=>PEOPLE.map(p=>({pid:p.id,day:null,slot,s:servingsFo
 
 /* ================= totals ================= */
 function dayTotals(d,pid){
-  const t=Object.fromEntries(NKEYS.map(k=>[k,0])); t.n=0; t.unk=0;
+  const t=Object.fromEntries(NKEYS.map(k=>[k,0])); t.n=0; t.unk=0; t.skip=0; t.out=0;
   SLOTS.forEach(s=>{
     const m=mealFor(d,s.id,pid); if(!m) return;
+    const st=statusOf(d,s.id,pid);
+    if(st==='skip'){ t.skip++; return; }
+    if(st){ const k=outEstimate(d,s.id,pid,st); t.kcal+=k; t.p+=k*.15/4; t.c+=k*.5/4; t.f+=k*.35/9; t.out++; t.unk++; return; }
     const pt=portion(m.rid,pid,s.id,d); if(!pt) return;
     NKEYS.forEach(k=>t[k]+=pt.n[k]); if(!s.fixed) t.n++; if(!pt.n.known) t.unk++;
   });
@@ -248,7 +300,7 @@ function buildGrocery(){
     batchIngredients(r,b.parts).forEach(it=>add(it.key,it.q,it.u));
   });
   // fixed daily items × 7 days
-  PEOPLE.forEach(p=>['drink','shake'].forEach(s=>{ const r=rec(FIXED[s][p.id]); (r.ing||[]).forEach(([k,q,u])=>add(k,q*7,u)); }));
+  PEOPLE.forEach(p=>['drink','shake'].forEach(s=>{ const r=rec(FIXED[s][p.id]); const n=DAYS.filter((_,d)=>!statusOf(d,s,p.id)).length; (r.ing||[]).forEach(([k,q,u])=>add(k,q*n,u)); }));
   const items=Object.values(agg).map(it=>{
     if(it.u==='txt') return Object.assign(it,{qty:''});
     const qty = it.count && !it.g ? niceCount(Math.ceil(it.count*2)/2)
@@ -264,5 +316,114 @@ function cellsForIngredient(key){
     if(r && recipeIng(r,'veg').concat(r.protein?[r.protein.chicken]:[]).some(i=>i[0]===key)) cells.push({d,slot,leftover:!!m.leftover});
   }));
   ['lunch','dinner'].forEach(slot=>{ const r=rec(state.farali[slot]); if(r&&recipeIng(r,'veg').some(i=>i[0]===key)) cells.push({d:FARALI.day,slot,farali:true}); });
+  const sn=rec(state.snack.rid); if(sn && recipeIng(sn,'veg').some(i=>i[0]===key)) cells.push({d:0,slot:'snack',weekly:true});
   return cells;
+}
+
+/* ================= generate & weekly refresh ================= */
+const CHICKEN_DINNER_DAYS=[0,1,4,6];          // Mon, Tue, Fri, Sun — tomorrow's leftover lunch can still be chicken
+const needsLeftover=d=>[6,0,1,2,3].includes(d); // Sun–Thu dinners become Mon–Fri lunches
+const pick=(arr,w)=>{ const ws=arr.map(w), tot=ws.reduce((a,b)=>a+b,0); if(!tot) return null; let x=Math.random()*tot; for(let i=0;i<arr.length;i++){ x-=ws[i]; if(x<=0) return arr[i]; } return arr[arr.length-1]; };
+
+// Fill the plan from day `from` (0 = whole week). Locked meals and earlier days are kept.
+// Queue first, then 1–2 chicken dinners, then the library. Returns a summary.
+function generateWeek({from=0}={}){
+  const plan=state.plan, used={}, inc=id=>{ if(id) used[id]=(used[id]||0)+1; };
+  const keep=(d,slot)=> d<from || !!plan[d].locks[slot];
+  const lib=RECIPES.filter(r=>!r.fixed);
+  const sum={placed:0,fromQueue:0,chicken:0};
+  // what stays
+  DAYS.forEach((_,d)=>{
+    ['breakfast','dinner'].forEach(s=>{ if(keep(d,s)) inc(plan[d][s]); else plan[d][s]=null; });
+    if(keep(d,'lunch')){ if(!isLeftoverLunch(d)) inc(plan[d].lunch); }
+    else { plan[d].lunch=null; plan[d].lunchFresh = d>=5 || (d===0 && !state.prevSunDinner); }
+  });
+  const isChickenDinner=d=>{ const r=rec(plan[d].dinner); return r&&r.protein; };
+  let chicken=DAYS.filter((_,d)=>isChickenDinner(d)).length;
+  const freeDinner=d=>d>=from && !plan[d].dinner && !plan[d].locks.dinner;
+  const fitsDinner=(r,d)=> r.cat==='main' && !r.farali && (!needsLeftover(d) || r.leftover);
+  const okRepeat=(r,d,slot)=> (used[r.id]||0)<2 && plan[(d+6)%7][slot]!==r.id && plan[(d+1)%7][slot]!==r.id;
+  const place=(d,slot,r,q)=>{ plan[d][slot]=r.id; inc(r.id); sum.placed++; if(q) sum.fromQueue++; if(slot==='dinner'&&r.protein){ chicken++; sum.chicken++; } };
+  // 1) queue
+  const leftoverQ=[], faraliQ={};
+  state.queue.forEach(id=>{
+    const r=rec(id); if(!r){ return; }
+    let done=false;
+    if(r.cat==='snack'){ if(from===0 && !state.snack.locked && !sum.snackFromQueue){ state.snack.rid=r.id; sum.fromQueue++; sum.snackFromQueue=true; done=true; } }
+    else if(r.farali && r.cat==='main' && from<=FARALI.day){
+      const s=['lunch','dinner'].find(x=>!faraliQ[x]);
+      if(s){ state.farali[s]=r.id; faraliQ[s]=true; sum.fromQueue++; done=true; }
+    }
+    else if(r.cat==='breakfast'){
+      const d=DAYS.findIndex((_,d)=>d>=from && !plan[d].breakfast && !plan[d].locks.breakfast && okRepeat(r,d,'breakfast'));
+      if(d>-1){ place(d,'breakfast',r,true); done=true; }
+    } else if(r.cat==='main'){
+      const days=DAYS.map((_,d)=>d).filter(d=>freeDinner(d) && fitsDinner(r,d) && okRepeat(r,d,'dinner') && (!r.protein || (CHICKEN_DINNER_DAYS.includes(d) && chicken<2)));
+      if(days.length){ place(days[0],'dinner',r,true); done=true; }
+      else { const wl=[5,6].find(d=>d>=from && !plan[d].lunch && !plan[d].locks.lunch); if(wl!==undefined && !r.protein){ plan[wl].lunch=r.id; inc(r.id); sum.placed++; sum.fromQueue++; done=true; } }
+    }
+    if(!done) leftoverQ.push(id);
+  });
+  state.queue=leftoverQ;
+  // 2) chicken: aim for 1–2 a week
+  const chickenTarget = Math.random()<0.5 ? 1 : 2;
+  const chickenRecipes=lib.filter(r=>r.protein);
+  while(chicken<chickenTarget){
+    const days=CHICKEN_DINNER_DAYS.filter(freeDinner); if(!days.length) break;
+    const d=days[Math.floor(Math.random()*days.length)];
+    const r=pick(chickenRecipes.filter(r=>okRepeat(r,d,'dinner')&&!used[r.id]), ()=>1); if(!r) break;
+    place(d,'dinner',r);
+  }
+  // 3) dinners
+  DAYS.forEach((_,d)=>{
+    if(!freeDinner(d)) return;
+    const prev=rec(plan[(d+6)%7].dinner);
+    const r=pick(lib.filter(r=>fitsDinner(r,d) && !r.protein && okRepeat(r,d,'dinner')),
+      r=>(used[r.id]?0.25:1) * (isPcodFriendly(r)?1.6:1) * (prev&&prev.cuisine===r.cuisine?0.5:1));
+    if(r) place(d,'dinner',r);
+  });
+  // 4) fresh lunches (weekends, or Monday with no Sunday leftovers)
+  DAYS.forEach((_,d)=>{
+    if(d<from || plan[d].locks.lunch || isLeftoverLunch(d) || plan[d].lunch) return;
+    const r=pick(lib.filter(r=>r.cat==='main' && !r.farali && !r.protein && r.id!==plan[d].dinner && r.id!==plan[(d+6)%7].dinner && (used[r.id]||0)<2),
+      r=>(used[r.id]?0.25:1) * (r.leftover?1:1.8) * (isPcodFriendly(r)?1.4:1));
+    if(r){ plan[d].lunch=r.id; inc(r.id); sum.placed++; }
+  });
+  // 5) breakfasts
+  DAYS.forEach((_,d)=>{
+    if(d<from || plan[d].breakfast || plan[d].locks.breakfast) return;
+    const r=pick(lib.filter(r=>r.cat==='breakfast' && !r.farali && okRepeat(r,d,'breakfast')),
+      r=>(used[r.id]?0.15:1) * (isPcodFriendly(r)?1.5:1));
+    if(r) place(d,'breakfast',r);
+  });
+  // 6) Aum's farali Thursday
+  if(from<=FARALI.day){
+    const far=lib.filter(r=>r.farali && r.cat==='main');
+    ['lunch','dinner'].forEach(s=>{ if(!faraliQ[s] && (!state.farali[s] || from===0)){ const other=state.farali[s==='lunch'?'dinner':'lunch'];
+      const r=pick(far.filter(r=>r.id!==other),()=>1); if(r) state.farali[s]=r.id; } });
+  }
+  // 7) weekly snack (only when the whole week is being planned)
+  if(from===0 && !state.snack.locked && !sum.snackFromQueue){
+    const last=(state.history[0]&&state.history[0].snack)?state.history[0].snack.rid:null;
+    const snacks=lib.filter(r=>r.cat==='snack'), fresh=snacks.filter(r=>r.id!==last && r.id!==state.snack.rid);
+    const r=pick(fresh.length?fresh:snacks,()=>1); if(r) state.snack.rid=r.id;
+  }
+  return sum;
+}
+// archive this week and start the given week (ISO Monday)
+function startNewWeek(ws){
+  const gap=weeksBetween(state.weekStart,ws);
+  state.history.unshift({weekStart:state.weekStart, plan:state.plan, farali:state.farali, snack:state.snack, log:state.log});
+  state.history=state.history.slice(0,8);
+  state.prevSunDinner = gap===1 ? state.plan[6].dinner : null;
+  const plan={}; DAYS.forEach((_,d)=>{ plan[d]=emptyDay(); });
+  state.plan=plan; state.weekStart=ws; state.log={}; state.grocery={};
+  state.farali={lunch:null,dinner:null}; state.snack=Object.assign({},state.snack,{locked:false});
+  return generateWeek({from:0});
+}
+function rolloverIfNeeded(){
+  const ws=activeWeekStart();
+  if(!state.weekStart){ state.weekStart=ws; return null; }
+  if(state.weekStart>=ws) return null;
+  return startNewWeek(ws);
 }
