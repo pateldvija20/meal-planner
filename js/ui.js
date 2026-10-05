@@ -19,11 +19,22 @@ let mDay=TODAY_IDX, mOpenIng=null, sheetState=null;
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const person=()=>personById(selPerson);
+function nameParts(r){ const p=String(r.name).split(' + '); return {main:p[0], sides:p.slice(1)}; }
+function sidesHTML(r){ const s=nameParts(r).sides; return s.length?`<span class="sides">${s.map(x=>`<span class="side">+ ${esc(x)}</span>`).join('')}</span>`:''; }
 const defSlot=r=>r.cat==='breakfast'?'breakfast':r.cat==='snack'?'snack':'dinner';
 const isLocked=(d,slot)=>slot==='snack'?!!state.snack.locked:!!state.plan[d].locks[slot];
 const shortName=r=>r.name.split('(')[0].trim();
 let toastT;
-function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1900); }
+function toast(msg,opts){
+  const t=$('#toast'); clearTimeout(toastT);
+  if(opts&&opts.action){
+    t.innerHTML=`<span>${esc(msg)}</span><button class="toast-act" type="button">${esc(opts.action)}</button>`;
+    t.classList.add('actionable');
+    t.querySelector('.toast-act').onclick=()=>{ t.classList.remove('show','actionable'); clearTimeout(toastT); opts.onAction&&opts.onAction(); };
+  } else { t.textContent=msg; t.classList.remove('actionable'); }
+  t.classList.add('show');
+  toastT=setTimeout(()=>t.classList.remove('show','actionable'), opts&&opts.action ? 5000 : 1900);
+}
 function fmtQty(q,u){
   if(q==null) return '';
   if(units==='us'){
@@ -49,47 +60,111 @@ const ICON={
   unlock:`<svg ${SV}><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>`,
   swap:`<svg ${SV}><path d="M7 4 3.5 7.5 7 11M3.5 7.5H17M17 13l3.5 3.5L17 20M20.5 16.5H7"/></svg>`,
   check:`<svg ${SV}><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>`,
+  shuffle:`<svg ${SV}><path d="M3 6.5h3.5c2.5 0 3.8 1.2 5.2 3.6l1.6 2.8c1.4 2.4 2.7 3.6 5.2 3.6H21M17.5 4l3.5 2.5-3.5 2.5M3 17.5h3.5c1.6 0 2.7-.5 3.6-1.5M14.4 8c.9-1 2-1.5 3.6-1.5M17.5 15l3.5 2.5-3.5 2.5"/></svg>`,
   spark:`<svg ${SV}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>`,
 };
 
 /* ================= mutations ================= */
 function commit(){ saveState(); renderEverything(); }
 const parseCtx=k=>{ const [d,slot]=k.split('|'); return {d:+d,slot}; };
+/* ================= swapping ================= */
+// alternatives with similar calories & protein that aren't already planned this week
+function swapSuggestions(d,slot,pid=selPerson,n=3){
+  const cur=mealFor(d,slot,pid), r0=cur&&rec(cur.rid), far=isFarali(pid,d)&&(slot==='lunch'||slot==='dinner');
+  const cat = slot==='breakfast'?'breakfast':slot==='snack'?'snack':'main';
+  const tgt = r0 ? portion(r0.id,pid,slot,d) : {kcal:slotBudget(pid,slot)||400,p:0};
+  const used=new Set(); DAYS.forEach((_,dd)=>MEAL_SLOTS.forEach(sl=>{ const m=mealFor(dd,sl); if(m) used.add(m.rid); }));
+  return RECIPES.filter(r=>!r.fixed && (far ? (r.farali&&r.cat==='main') : (r.cat===cat && !r.farali))
+      && (!r0||r.id!==r0.id) && !used.has(r.id)
+      && !(slot==='dinner' && needsLeftover(d) && !r.leftover)
+      && !(r.protein && NO_CHICKEN_DAYS.includes(d)))
+    .map(r=>{ const pt=portion(r.id,pid,slot,d);
+      const score=Math.abs(pt.kcal-tgt.kcal)/Math.max(1,tgt.kcal) + (tgt.p?Math.abs(pt.p-tgt.p)/Math.max(20,tgt.p)*0.8:0) - (isPcodFriendly(r)?0.06:0);
+      return {r,pt,score,dk:pt.kcal-tgt.kcal,dp:pt.p-(tgt.p||pt.p)}; })
+    .sort((a,b)=>a.score-b.score).slice(0,n);
+}
+// trade one meal slot between two days (or move it when the other day is empty)
+function tradeMeals(d1,d2,slot){
+  if(d1===d2||!['breakfast','lunch','dinner'].includes(slot)) return false;
+  if(slot==='lunch' && (isLeftoverLunch(d1)||isLeftoverLunch(d2))){ toast('Weekday lunches are leftovers. Trade the dinners instead.'); return false; }
+  const a=state.plan[d1], b=state.plan[d2], ra=a[slot], rb=b[slot];
+  if(!ra && !rb) return false;
+  a[slot]=rb||null; b[slot]=ra||null;
+  const by = Sync.person ? Sync.person.label : person().label;
+  state.changes.unshift({id:'chg-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:Date.now(), kind:'trade', d:d1, d2, slot, from:ra||null, to:rb||null, by});
+  state.changes=state.changes.slice(0,40);
+  const warn=[[ra,d2],[rb,d1]].some(([id,d])=>id && slot==='dinner' && needsLeftover(d) && !rec(id).leftover);
+  commit();
+  toast(rb ? `${DAYS[d1]} ⇄ ${DAYS[d2]} ${slot}${warn?'. One dish doesn’t reheat well for tomorrow’s lunch.':''}` : `Moved to ${DAYS[d2]} ${slot}`);
+  return true;
+}
+// one tap: swap in a good alternative, with Undo
+function shuffleMeal(d,slot,pid=selPerson){
+  const opts=swapSuggestions(d,slot,pid,3); if(!opts.length) return toast('No close alternatives left this week');
+  const pick=opts[Math.floor(Math.random()*opts.length)].r;
+  const snap=JSON.stringify({plan:state.plan[d],farali:state.farali,snack:state.snack,n:state.changes.length});
+  if(!setMealView(d,slot,pick.id,pid)) return;
+  const logged=state.changes[0] && state.changes[0].to===pick.id ? state.changes[0].id : null;
+  toast(`Swapped for ${nameParts(pick).main}`,{action:'Undo',onAction:()=>{
+    const o=JSON.parse(snap); state.plan[d]=o.plan; state.farali=o.farali; state.snack=o.snack;
+    if(logged) state.changes=state.changes.filter(c=>c.id!==logged);
+    commit(); toast('Swap undone');
+  }});
+}
+// who changed what — shared with the family through the synced state, shown in Notifications
+function logChange(d,slot,from,to,pid){
+  if(from===to) return;
+  const by = Sync.person ? Sync.person.label : person().label;
+  state.changes.unshift({id:'chg-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:Date.now(), d, slot, from:from||null, to:to||null, by, who: pid&&isFarali(pid,d)&&(slot==='lunch'||slot==='dinner') ? personById(pid).label : null});
+  state.changes=state.changes.slice(0,40);
+}
+const currentRid=(d,slot,pid)=>{ const m=mealFor(d,slot,pid); return m&&!m.leftover?m.rid:null; };
 function setMealView(d,slot,rid,pid=selPerson){
   const r=rec(rid); if(!r) return false;
   if(slot==='snack'){
     if(r.cat!=='snack'){ toast('Pick a snack-box recipe for the weekly snack'); return false; }
-    state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
+    logChange(null,'snack',state.snack.rid,rid); state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
   }
-  if(r.cat==='snack'){ toast('That’s a snack-box recipe — it goes in the weekly snack'); return false; }
+  if(r.cat==='snack'){ toast('That’s a snack-box recipe. It goes in the weekly snack.'); return false; }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){
-    if(!r.farali){ toast(`${personById(pid).label}'s Thursday needs a farali recipe`); return false; }
-    state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
+    if(!r.farali){ toast(`${personById(pid).label}’s Thursday needs a farali recipe`); return false; }
+    logChange(d,slot,state.farali[slot],rid,pid); state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
   }
-  if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch/dinner recipe — pick a breakfast'); return false; }
-  if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast — pick a lunch/dinner recipe'); return false; }
+  if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch or dinner recipe. Pick a breakfast.'); return false; }
+  if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast. Pick a lunch or dinner recipe.'); return false; }
   const day=state.plan[d];
+  logChange(d,slot,currentRid(d,slot)||mealFor(d,slot)&&mealFor(d,slot).rid,rid);
   if(slot==='lunch' && LEFTOVER_DAYS.includes(d)) day.lunchFresh=true;
   day[slot]=rid; armed=null; commit();
   toast(`${shortName(r)} → ${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}`);
   return true;
 }
 function removeMealView(d,slot,pid=selPerson){
-  if(slot==='snack'){ state.snack.rid=null; return commit(); }
-  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ state.farali[slot]=null; return commit(); }
+  if(slot==='snack'){ logChange(null,'snack',state.snack.rid,null); state.snack.rid=null; return commit(); }
+  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ logChange(d,slot,state.farali[slot],null,pid); state.farali[slot]=null; return commit(); }
   const day=state.plan[d];
-  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off — add a fresh lunch'); }
+  { const m=mealFor(d,slot); if(m) logChange(d,slot,m.rid,null); }
+  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off. Add a fresh lunch.'); }
   day[slot]=null; delete day.locks[slot]; commit();
 }
 function useLeftovers(d){ const day=state.plan[d]; day.lunchFresh=false; day.lunch=null; delete day.locks.lunch; commit(); toast(`${DAYS[d]} lunch is ${d===0?'Sunday':DAYS[d-1]}’s dinner again`); }
 function toggleLock(d,slot){
   if(slot==='snack'){ state.snack.locked=!state.snack.locked; commit(); return toast(state.snack.locked?'Snack box locked for next week too':'Unlocked'); }
-  const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked — Generate will keep it':'Unlocked');
+  const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked. Generate will keep it.':'Unlocked');
+  requestAnimationFrame(()=>Motion.pop(document.querySelector(`[data-mlock="${d}|${slot}"],[data-lock="${d}|${slot}"]`)));
 }
 function toggleQueue(id){
-  if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to plan — tap Generate to place it'); }
+  if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to the plan queue. Generate places it.'); }
   else { state.queue=state.queue.filter(x=>x!==id); toast('Removed from the plan queue'); }
   armed=null; commit();
+}
+// "Add to plan": toggle, then fly a dot from the button to wherever the queue lives
+function addToPlan(btn,id){
+  const adding=!state.queue.includes(id), from=btn?btn.getBoundingClientRect():null;
+  toggleQueue(id);
+  if(!adding||!from) return;
+  const target = isMobile() ? (document.querySelector('[data-tab="queue"]')) : ($('#qcount'));
+  Motion.flyTo(from,target,()=>Motion.pop(isMobile()?document.querySelector('.m-badge'):$('#qcount')));
 }
 function runGenerate(mode){
   let sum;
@@ -97,9 +172,11 @@ function runGenerate(mode){
   else sum=generateWeek({from: mode==='rest' ? TODAY_IDX+1 : 0});
   TODAY_IDX=todayIndex(); if(mode==='next') mDay=0;
   commit();
+  requestAnimationFrame(()=>Motion.enter(document.querySelectorAll(isMobile()?'#mToday .m-meal':'#cal .chip:not(.fixed)'),{stagger:isMobile()?45:12,max:isMobile()?8:40}));
   toast(`${mode==='next'?'Next week planned':'Plan refreshed'} · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}${sum.chicken?` · ${sum.chicken} chicken night${sum.chicken>1?'s':''}`:''}`);
 }
-function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit(); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
+function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit();
+  requestAnimationFrame(()=>Motion.pop(document.querySelector(`[data-mstatus="${d}|${slot}"]`))); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
 function resetPlan(){ const s=seedState(); s.queue=state.queue; s.custom=state.custom; s.grocery={}; state=normalize(s); commit(); toast('Week reset to the starter plan'); }
 
 /* ================= desktop ================= */
@@ -121,19 +198,19 @@ function chipHtml(m,d,slot,pid){
   const tag = st?`<div class="lo st">${esc(statusLabel(st))}</div>` : m.weekly?`<div class="lo">weekly snack · made Sunday</div>` : m.leftover?`<div class="lo">↩ ${m.from} dinner${pt.v==='chicken'?' · chicken':''}</div>` : m.farali?`<div class="lo">farali · ${pp.label}</div>` : pt.v?`<div class="lo">${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])} · ${pp.label}</div>`:'';
   const acts = m.fixed ? '' : `<div class="chip-act">${(!m.leftover&&!m.farali&&!(m.weekly&&d>0))?`<button class="lk ${locked?'on':''}" data-lock="${key}" title="${locked?'Unlock':'Lock so Generate keeps it'}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="x" data-remove="${key}" title="${m.leftover?'Cook a fresh lunch instead':'Remove'}" aria-label="Remove">×</button></div>`;
   return `<div class="chip ${m.fixed?'fixed':''} ${m.leftover?'leftover':''} ${m.farali?'farali':''} ${m.weekly?'weekly':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" ${m.fixed?'':'draggable="true"'} data-rid="${m.rid}" data-open="${m.rid}" data-ctx="${key}" style="--cat:${CATS[r.cat]};--sel:${pp.hex}">
-    ${tag}<div class="nm">${esc(shortName(r))}</div>
+    <span class="chip-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r)}</span>${tag}<div class="nm">${esc(nameParts(r).main.split('(')[0].trim())}</div>${sidesHTML(r)}
     <div class="mac"><b>${pt.kcal}</b> kcal · <b style="color:var(--pro)">${pt.p}g</b> P${pt.s!==1&&!m.fixed?` · ${niceCount(pt.s)}×`:''}</div>${acts}</div>`;
 }
 function renderCal(){
   const pid=selPerson, pp=person();
   let h=`<div class="corner"></div>`+DAYS.map((d,i)=>`<div class="day-h ${i===TODAY_IDX?'is-today':''}">${d} <span class="dnum">${dayDate(i).split(' ')[1]}</span><small>${DAYNOTE[i]||'&nbsp;'}</small></div>`).join('');
   SLOTS.forEach(s=>{
-    h+=`<div class="row-lbl">${s.label}</div>`;
+    h+=`<div class="row-lbl">${s.label}${s.id==='snack'&&state.snack.rid?`<small class="row-sub">for ${state.snack.eaters.map(id=>personById(id).label).join(', ')}</small>`:''}</div>`;
     DAYS.forEach((_,d)=>{
       const m=mealFor(d,s.id,pid), key=d+'|'+s.id;
       let inner = m ? chipHtml(m,d,s.id,pid) : '';
       if(!m && s.id==='snack'){
-        inner = state.snack.rid ? `<span class="cell-empty">not in ${pp.label}’s snack box</span>` : `<span class="cell-empty">drop a snack-box recipe</span>`;
+        inner = state.snack.rid ? `<span class="cell-empty" aria-label="Not in ${pp.label}’s snack box">–</span>` : `<span class="cell-empty">Drop a snack-box recipe</span>`;
       } else if(!m && !s.fixed){
         inner = (s.id==='lunch' && LEFTOVER_DAYS.includes(d) && state.plan[d].lunchFresh && !isFarali(pid,d))
           ? `<button class="use-lo" data-uselo="${d}">↩ use ${d===0?'Sunday':DAYS[d-1]} leftovers</button>` : `<span class="cell-empty">${armed?'tap to place':'drop a recipe'}</span>`;
@@ -153,7 +230,7 @@ function renderCal(){
 }
 function renderQueue(){
   $('#qcount').textContent=state.queue.length;
-  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Nothing queued. Tap “Add to plan” on any recipe — Generate places queued recipes first, then fills the rest of the week.</div>'; return; }
+  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Nothing queued. Tap “Add to plan” on any recipe. Generate places queued recipes first, then fills the rest of the week.</div>'; return; }
   $('#qstrip').innerHTML=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="q-chip ${armed&&armed.rid===rid&&armed.qi===i?'armed':''}" draggable="true" data-rid="${rid}" data-qi="${i}" style="--cat:${CATS[r.cat]}"><div><div class="qn">${esc(shortName(r))}</div><div class="qm">${pt.kcal} kcal · ${pt.p}g P · ${person().label}</div></div><button data-deq="${i}" title="Remove from queue" aria-label="Remove from queue">×</button></div>`;
   }).join('');
@@ -184,26 +261,38 @@ function renderFilters(){
   const cu=cuisineList().map(c=>`<button data-cu="${esc(c)}" class="${c===cuisine?'active':''}">${c==='all'?'all cuisines':esc(c)}</button>`).join('');
   $('#cuisines').innerHTML=cu; $('#mCuisines').innerHTML=cu;
 }
+// recipe of the week: a PCOD-friendly main, the same for the whole family all week
+function recipeOfWeek(){
+  const pool=libRecipes().filter(r=>r.cat==='main'&&!r.farali&&isPcodFriendly(r)); if(!pool.length) return null;
+  let h=0; for(const c of state.weekStart) h=(h*31+c.charCodeAt(0))>>>0; return pool[h%pool.length];
+}
+function tileHTML(r,kind){
+  const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
+  const stamp = kind==='feature' ? '<span class="stamp gold">Recipe of the week!</span>'
+    : r.id===state.snack.rid ? '<span class="stamp gold">This week’s box</span>'
+    : r.protein ? '<span class="stamp">Chicken night</span>' : '';
+  const cls = kind==='feature' ? 'feature' : kind==='wide' ? 'wide colored' : '';
+  return `<article class="tile ${cls}" style="--bk:${CAT_COLOR[r.cat]||'var(--surface-2)'}" data-rid="${r.id}" draggable="true">${stamp}
+    <button class="m-hit" data-open="${r.id}"><span class="tile-emoji" aria-hidden="true">${emojiOf(r)}</span>
+      <span class="tile-name">${esc(nameParts(r).main)}</span>${sidesHTML(r)}
+      ${kind?`<span class="tile-sub">${esc(r.upgrade)}</span>`:''}
+      <span class="tile-meta"><b>${pt.kcal}</b> kcal · <b>${pt.p}g</b> protein</span>
+      <span class="tile-sub">${esc(r.farali?'Farali':r.cuisine||CAT_LABEL[r.cat])}</span>
+    </button>
+    <button class="tile-add ${inQ?'added':''}" data-addq="${r.id}" aria-label="${inQ?'Remove '+esc(r.name)+' from the plan queue':'Add '+esc(r.name)+' to the plan'}">${inQ?'✓':'+'}</button></article>`;
+}
+function bentoHTML(list){
+  const feat = filter==='all' && !query && cuisine==='all' ? recipeOfWeek() : null;
+  const out=[]; let n=0;
+  if(feat) out.push(tileHTML(feat,'feature'));
+  list.forEach(r=>{ if(feat&&r.id===feat.id) return; out.push(tileHTML(r, n%7===4?'wide':'')); n++; });
+  return out.join('');
+}
 function renderLib(){
   const all=libRecipes(), list=all.filter(matches);
   $('#libcount').textContent=list.length+' of '+all.length+' recipes';
-  if(!list.length){ $('#lib').innerHTML=`<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`; return; }
-  $('#lib').innerHTML=list.map(r=>{
-    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
-    const cols=PEOPLE.map(p=>{ const q=portion(r.id,p.id,slot,null); return `<div class="pcol ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="who"><i></i>${p.label}<small>${niceCount(q.s)}×</small></div><div class="serve">${esc(serveText(r,q.s,q.v))}</div><div class="nums"><span class="kc">${q.kcal}</span><span class="pr">${q.p}g P</span></div></div>`; }).join('');
-    return `<article class="rc" draggable="true" data-rid="${r.id}" style="--cat:${CATS[r.cat]}">
-      <div class="top"><div class="name">${esc(r.name)}</div><div class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}${r.custom?' · custom':''}</div></div>
-      <div class="rc-meta">${esc(r.cuisine||'')}</div><div class="badges">${recipeBadges(r)}</div>
-      <div class="upgrade"><span class="lift">Upgrade</span><span>${esc(r.upgrade)}</span></div>
-      <div class="macro-wrap"><div class="macro-label"><span>Macros — <b>${person().label}</b> portion</span><span><b>${pt.kcal}</b> kcal</span></div>${macroBar(pt)}
-        <div class="macro-key"><span><i style="background:var(--pro)"></i>P ${pt.p}g</span><span><i style="background:var(--carb)"></i>C ${pt.c}g</span><span><i style="background:var(--fat)"></i>F ${pt.f}g</span></div></div>
-      <div class="portions"><div class="ph">Portions · ${slot}</div><div class="ptable">${cols}</div></div>
-      <button class="addq ${inQ?'added':''}" data-addq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button>
-    </article>`;
-  }).join('');
+  $('#lib').innerHTML = list.length ? bentoHTML(list) : `<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`;
 }
-
-/* ================= recipe drawer ================= */
 function ingLine(it){
   const qt = it.u==='' ? niceCount(Math.ceil(it.q*2)/2) : fmtQty(roundQty(it.q,it.u),it.u);
   const who = it.who && it.who.size ? `<small class="ing-who">for ${[...it.who].map(id=>personById(id).label).join(', ')}</small>` : '';
@@ -260,7 +349,8 @@ function openDrawer(rid,ctxKey,keep){
   const li=arr=>(arr&&arr.length?arr:['—']).map(x=>`<li>${esc(x)}</li>`).join('');
   $('#drawerBody').innerHTML=`
     ${ctx?`<div class="d-ctx">${FULLDAY[ctx.d]} · ${SLOT_LABEL[ctx.slot]}${m&&m.leftover?` · leftovers from ${m.from} dinner`:''}${m&&m.farali?` · farali for ${person().label}`:''}</div>`:''}
-    <h2 class="d-name">${esc(r.name)}</h2>
+    <div class="d-hero-emoji" style="--bk:${ctx?SLOT_COLOR[ctx.slot]:(CAT_COLOR[r.cat]||'var(--surface)')}" aria-hidden="true">${emojiOf(r)}</div>
+    <h2 class="d-name">${esc(nameParts(r).main)}</h2>${sidesHTML(r).replace('class="sides"','class="sides d-sides"')}
     <div class="d-tagrow"><span class="tag" style="background:${CATS[r.cat]}">${r.farali?'farali':CAT_LABEL[r.cat]}</span>${r.cuisine?`<span class="tag ghost">${esc(r.cuisine)}</span>`:''}${r.custom?'<span class="tag ghost">custom</span>':''}</div>
     <div class="badges">${recipeBadges(r)}</div>
     ${r.protein?`<p class="pf-note">Shared base: one gravy, split into two pots — chicken for Akshar &amp; Aum, ${esc(r.protein.veg[3])} for Dvija. On Thursdays and Saturdays everyone gets ${esc(r.protein.veg[3])}.</p>`:''}
@@ -283,7 +373,7 @@ function ppOne(html){
 }
 function closeDrawer(){ const dr=$('#drawer'); dr.classList.remove('open'); dr.setAttribute('aria-hidden','true'); $('#scrim').classList.remove('show'); drawerView=null; }
 function openShell(keep){ const dr=$('#drawer'); dr.classList.add('open'); dr.setAttribute('aria-hidden','false'); if(!keep) dr.querySelector('.drawer-body').scrollTop=0; $('#scrim').classList.add('show'); }
-function refreshDrawer(){ if(!drawerView) return; if(drawerView.t==='recipe') openDrawer(drawerView.rid,drawerView.ctx,true); else if(drawerView.t==='grocery') openGrocery(true); else if(drawerView.t==='profile') openProfile(true); }
+function refreshDrawer(){ if(!drawerView) return; if(drawerView.t==='recipe') openDrawer(drawerView.rid,drawerView.ctx,true); else if(drawerView.t==='grocery') openGrocery(true); else if(drawerView.t==='profile') openProfile(true); else if(drawerView.t==='notes') openNotes(true); }
 
 /* ================= custom recipes ================= */
 function openAddForm(){
@@ -360,24 +450,24 @@ function groceryHTML(scope){
     let extra='';
     if(open){
       const cells=it.key&&FOODS[it.key]?cellsForIngredient(it.key):[];
-      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' · '+SLOT_LABEL[c.slot]}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink / shake'):'From a custom recipe'}</div>
+      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' '+SLOT_LABEL[c.slot].toLowerCase()}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink and shake'):'From a custom recipe'}</div>
         <div class="gc-move"><span>Buy at</span>${state.stores.map(st=>`<button data-setstore="${esc(it.id)}|${st.id}" class="${it.storeId===st.id?'on':''}">${esc(st.name)}</button>`).join('')}</div>`;
     }
-    return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}"><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><b class="gc-q">${it.qty||'as listed'}</b></button>${extra}</div>`;
+    return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><span class="gc-ic" aria-hidden="true">${FOOD_EMOJI[it.key]||AISLE_EMOJI[it.cat]||'🛒'}</span><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><span class="gc-q">${it.qty||'as listed'}</span></button><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}">${extra}</div>`;
   };
-  const byAisle=list=>AISLES.map(a=>{ const g=list.filter(it=>(it.cat||'Other')===a); return g.length?`<div class="gc-group">${a}</div>`+g.map(row).join(''):''; }).join('');
+  const byAisle=list=>AISLES.map(a=>{ const g=list.filter(it=>(it.cat||'Other')===a); return g.length?`<div class="gc-group">${AISLE_EMOJI[a]} ${a}</div>`+g.map(row).join(''):''; }).join('');
   const shown = gStore==='all' ? sections : sections.filter(x=>x.id===gStore);
   const visible = shown.flatMap(x=>x.items), done=visible.filter(it=>it.done).length;
   const tabs=[{id:'all',name:'All',items}].concat(sections).map(x=>{ const d=x.items.filter(it=>it.done).length;
     return `<button data-gstore="${x.id}" class="${gStore===x.id?'active':''}" aria-pressed="${gStore===x.id}">${esc(x.name)} <small>${d?d+'/':''}${x.items.length}</small></button>`; }).join('');
   const body = !items.length ? '<p class="form-note">Nothing planned yet.</p>'
-    : gStore==='all' ? shown.filter(x=>x.items.length).map(x=>`<div class="gc-store"><div class="gc-store-h"><b>${esc(x.name)}</b><span>${x.items.filter(i=>i.done).length}/${x.items.length}</span></div>${x.items.map(row).join('')}</div>`).join('')
+    : gStore==='all' ? shown.filter(x=>x.items.length).map(x=>`<div class="gc-store"><div class="gc-store-h"><b>${esc(x.name)}</b><span>${x.items.filter(i=>i.done).length} of ${x.items.length}</span></div>${x.items.map(row).join('')}</div>`).join('')
     : (visible.length ? byAisle(visible) : `<p class="form-note">Nothing to buy at ${esc((shown[0]||{}).name||'this store')} this week.</p>`);
   const label = gStore==='all' ? '' : ' '+((shown[0]||{}).name||'');
-  return `<p class="${scope==='m'?'m-sub':'form-note'}">Everything for this week’s ${sessions} cooking sessions (dinners include tomorrow’s lunch, plus the Sunday snack box) and 7 days of drinks and shakes. Tap an item to see where it’s used or move it to another store. Salt, spices and herbs assumed on hand.</p>
+  return `${items.length?`<div class="g-hero"><span class="num">${done}<small>of ${visible.length} in the basket</small></span>${segBar(visible.length?done/visible.length:0,'var(--ink)',12)}</div>`:''}
+    <p class="${scope==='m'?'m-sub':'form-note'}">This week’s ${sessions} cooking sessions plus 7 days of drinks and shakes. Tap an item to see where it’s used or move it to another store.</p>
     ${items.length?`<div class="filters g-tabs">${tabs}</div>
-    <div class="m-prog"><div class="bar" style="--sel:var(--olive)"><span style="width:${visible.length?Math.round(done/visible.length*100):0}%"></span></div></div>
-    <div class="gc-actions"><button class="btn-ghost" data-gcopy>Copy${esc(label)} list</button><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gmanage>Stores…</button><span class="hint">${done}/${visible.length} ticked</span></div>`:''}
+    <div class="gc-actions"><button class="btn-ghost" data-gcopy>Copy${esc(label)} list</button><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gmanage>Stores…</button></div>`:''}
     <div class="gc-list">${body}</div>`;
 }
 function openGrocery(keep){
@@ -404,10 +494,14 @@ function onGroceryClick(e){
   if(q('[data-gmanage]')){ openStoresSheet(); return false; }
   return false;
 }
+let gTimer=null;
 function onGroceryChange(e){
   const cb=e.target.closest('[data-g]'); if(!cb) return false;
   if(cb.checked) state.grocery[cb.dataset.g]=1; else delete state.grocery[cb.dataset.g];
-  saveState(); return true;
+  const row=cb.closest('.gc-item'); if(row) row.classList.toggle('done',cb.checked);
+  saveState();
+  clearTimeout(gTimer); gTimer=setTimeout(renderEverything, Motion.reduced()?0:420);   // let the check + strike-through play first
+  return false;
 }
 /* manage stores (sheet) */
 function openStoresSheet(){
@@ -441,48 +535,52 @@ function jumpTo(key){
 const isMobile=()=>window.matchMedia('(max-width:760px)').matches;
 
 /* ================= mobile ================= */
-const TABS=[['discover','Discover'],['today','Today'],['grocery','Grocery'],['queue','Queue']];
+const TABS=[['today','Today'],['discover','Discover'],['grocery','Grocery'],['queue','Queue']];
 function renderMobile(){
   const pp=person();
-  $('#mProfile').innerHTML=`<span style="--pc:${pp.hex}">${pp.label[0]}</span>${ICON.chart}<i class="sync-dot s-${Sync.status}"></i>`;
-  $('#mKicker').textContent = Sync.user ? `${SYNC_LABEL[Sync.status]} · ${Sync.person?Sync.person.label:''}` : 'Family of three · not synced';
-  $('#mPeople').innerHTML=PEOPLE.map(p=>`<button data-mp="${p.id}" class="${p.id===selPerson?'active':''}" aria-pressed="${p.id===selPerson}"><span class="dot" style="background:${p.hex}"></span>${p.label}</button>`).join('');
+  $('#mProfile').innerHTML=`<span style="--pc:${pp.hex}">${pp.label[0]}</span><i class="sync-dot s-${Sync.status}"></i>`;
   $('#mTabs').innerHTML=TABS.map(([id,l])=>`<button class="m-tab ${id===mTab?'active':''}" data-tab="${id}" ${id===mTab?'aria-current="page"':''}>${ICON[id]}${l}${id==='queue'&&state.queue.length?`<span class="m-badge">${state.queue.length}</span>`:''}</button>`).join('');
+  Motion.slide('tabs',$('#mTabs'),'tab-ind',TABS.findIndex(x=>x[0]===mTab));
   document.querySelectorAll('.m-panel').forEach(p=>p.hidden=p.dataset.panel!==mTab);
   ({discover:renderMDiscover,today:renderMToday,grocery:renderMGrocery,queue:renderMQueue})[mTab]();
 }
-function setTab(t){ mTab=t; store.set('mp_tab',t); renderMobile(); window.scrollTo(0,0); }
+function setTab(t){
+  if(t===mTab){ window.scrollTo({top:0,behavior:Motion.reduced()?'auto':'smooth'}); return; }
+  mTab=t; store.set('mp_tab',t);
+  Motion.transition(()=>{ renderMobile(); window.scrollTo(0,0); });
+}
 function renderMDiscover(){
   $('#mFilters').innerHTML=LIB_FILTERS.map(([c,l])=>`<button data-mf="${c}" class="${c===filter?'active':''}">${l}</button>`).join('');
   if($('#mSearch').value!==query) $('#mSearch').value=query;
-  const all=libRecipes(), list=all.filter(matches), pp=person();
+  const all=libRecipes(), list=all.filter(matches);
   $('#mLibCount').textContent=list.length+' of '+all.length;
-  if(!list.length){ $('#mLib').innerHTML=`<div class="m-empty">No recipes match “${esc(query)}”.</div>`; return; }
-  $('#mLib').innerHTML=list.map(r=>{
-    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
-    return `<article class="m-card" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${r.id}">
-        <span class="top"><span class="name">${esc(r.name)}</span><span class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}</span></span>
-        <span class="m-upg">${esc(r.cuisine?r.cuisine+' · ':'')}${esc(r.upgrade)}</span>
-        <span class="m-mac"><span><b>${pt.kcal}</b> kcal · ${pp.label} ${niceCount(pt.s)}×</span><span><b style="color:var(--pro)">P ${pt.p}g</b> · C ${pt.c} · F ${pt.f}</span></span>${macroBar(pt)}<span class="badges">${recipeBadges(r)}</span></button>
-      <div class="m-card-actions"><button class="m-btn ${inQ?'ghost added':''}" data-mq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button></div></article>`;
-  }).join('');
+  $('#mLib').innerHTML = list.length ? bentoHTML(list) : `<div class="m-empty">No recipes match “${esc(query)}”.</div>`;
 }
+// the day as dial segments: one arc per meal, sized by what that person eats
+function dayParts(d,pid){
+  return SLOTS.map(s=>{ const m=mealFor(d,s.id,pid); if(!m) return null; const st=statusOf(d,s.id,pid);
+    const kcal = st==='skip' ? 0 : st ? outEstimate(d,s.id,pid,st) : portion(m.rid,pid,s.id,d).kcal;
+    return {slot:s.id,kcal,color:SLOT_COLOR[s.id],emoji:emojiOf(rec(m.rid))}; }).filter(Boolean);
+}
+let lastSumKcal=null, lastSumKey=null;
 function renderMToday(dir){
   const pid=selPerson, pp=person(), t=dayTotals(mDay,pid), g=macroGuide(pid);
-  const pct=Math.round(t.kcal/pp.target*100), over=pp.note==='losing'&&t.kcal>pp.target*1.05;
-  const days=DAYS.map((dn,d)=>{ const w=Math.min(100,Math.round(dayTotals(d,pid).kcal/pp.target*100));
-    return `<button class="m-day ${d===mDay?'active':''} ${d===TODAY_IDX?'is-today':''}" data-day="${d}" aria-pressed="${d===mDay}" aria-label="${FULLDAY[d]}${d===TODAY_IDX?' (today)':''}">${dn}<span class="pip"><i style="width:${w}%"></i></span></button>`; }).join('');
-  const stat=(lbl,v,tg,col)=>`<div class="m-stat"><div class="k">${lbl}</div><div class="v">${v}<small>/${tg}g</small></div><div class="bar" style="--sel:${col}"><span style="width:${Math.min(100,Math.round(v/tg*100))}%"></span></div></div>`;
+  const pct=Math.round(t.kcal/pp.target*100), over=t.kcal>pp.target*1.05;
+  const strip=DAYS.map((dn,d)=>{
+    const dots=['breakfast','lunch','dinner'].map(s=>`<i style="${mealFor(d,s,pid)?`background:${SLOT_COLOR[s]}`:''}"></i>`).join('');
+    return `<button class="ds-day ${d===mDay?'active':''} ${d===TODAY_IDX?'is-today':''}" data-day="${d}" aria-pressed="${d===mDay}" aria-label="${FULLDAY[d]} ${dayDate(d)}${d===TODAY_IDX?' (today)':''}"><span class="ds-name">${dn}</span><span class="ds-num">${dayDate(d).split(' ')[1]}</span><span class="ds-dots">${dots}</span></button>`; }).join('');
+  const hm=(lbl,v,tg,col)=>`<div class="hm"><span class="k">${lbl}</span><b>${v}<small> / ${tg}g</small></b>${segBar(v/tg,col,10)}</div>`;
   const rows=SLOTS.map(s=>{
     const m=mealFor(mDay,s.id,pid), key=mDay+'|'+s.id;
-    let body;
     if(!m && s.id==='snack') return '';
+    let body;
     if(m){ const r=rec(m.rid), pt=portion(m.rid,pid,s.id,mDay), locked=isLocked(mDay,s.id), st=statusOf(mDay,s.id,pid);
       const vtag=pt.v?` · ${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])}`:'';
-      const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo fixed">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo fixed">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
-      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" style="--cat:${CATS[r.cat]}">
-        <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(r.name)}</span><span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
-        <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
+      const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
+      body=`<div data-key="${key}" class="m-item ${!m.fixed&&!m.leftover&&!m.farali&&!m.weekly?'can-drag':''} ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}">
+        <span class="meal-ic" style="--bk:${SLOT_COLOR[s.id]}" aria-hidden="true">${emojiOf(r)}</span>
+        <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
+        <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button><button class="m-ic" data-mshuffle="${key}" aria-label="Shuffle for a similar meal">${ICON.shuffle}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
       </div>`;
     } else {
       const canLo = s.id==='lunch' && LEFTOVER_DAYS.includes(mDay) && state.plan[mDay].lunchFresh && !isFarali(pid,mDay);
@@ -490,38 +588,41 @@ function renderMToday(dir){
     }
     const st0=m&&statusOf(mDay,s.id,pid);
     const kc=!m?0: st0==='skip'?0 : st0?outEstimate(mDay,s.id,pid,st0) : portion(m.rid,pid,s.id,mDay).kcal;
-    return `<div class="m-meal"><div class="m-meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
+    return `<div class="meal-sec"><div class="meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
   }).join('');
-  const dinnerBatch=batchFor(mDay,'dinner');
-  const cookNote = dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? `<p class="m-cook">Tonight: cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))} — includes ${FULLDAY[nextDay(mDay)]}’s lunch.</p>` : '';
-  const snackR=rec(state.snack.rid);
-  const snackNote = mDay===0 && snackR ? `<p class="m-cook">Snack box this week: ${esc(snackR.name)} — prep ${snackBatch()?snackBatch().servings:0} servings on Sunday (keeps ${esc(snackR.keeps||'a week')}).</p>` : '';
-  const faraliNote = mDay===FARALI.day && pid!==FARALI.pid ? `<p class="m-cook">Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'—')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'—')} for dinner.</p>`:'';
+  const note=(e,bk,txt)=>`<p class="note" style="--bk:${bk}"><span class="e" aria-hidden="true">${e}</span><span>${txt}</span></p>`;
+  const dinnerBatch=batchFor(mDay,'dinner'), snackR=rec(state.snack.rid);
+  const notes=(dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? note('🍳','var(--c-snack)',`Tonight, cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))}. That covers ${FULLDAY[nextDay(mDay)]}’s lunch too.`) : '')
+    + (mDay===0 && snackR ? note(emojiOf(snackR),'var(--c-breakfast)',`Snack box this week: ${esc(snackR.name)}. Prep ${snackBatch()?snackBatch().servings:0} servings on Sunday; it keeps ${esc(snackR.keeps||'a week')}.`) : '')
+    + (mDay===FARALI.day && pid!==FARALI.pid ? note('🌾','var(--c-lunch)',`Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'nothing yet')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'nothing yet')} for dinner.`) : '');
+  const sub=`${mDay===TODAY_IDX?'Today · ':''}${dayDate(mDay)}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}`;
   $('#mToday').innerHTML=`
-    <div class="m-days" style="--sel:${pp.hex}">${days}</div>
+    <div class="daystrip">${strip}</div>
     <div class="m-daybody ${dir?'m-anim':''}" style="--dx:${(dir||0)*28}px">
-      <div class="m-dayhead"><div><div class="d-ctx">${mDay===TODAY_IDX?'Today':dayDate(mDay)}${mDay===TODAY_IDX?' · '+dayDate(mDay):''}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}</div><h2 class="m-h2">${FULLDAY[mDay]}</h2></div>
-        <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
-      <div class="m-sum">
-        <div class="m-sum-top"><div><span class="big ${over?'over':''}">${t.kcal.toLocaleString()}</span><span class="of">/ ${pp.target.toLocaleString()} kcal · ${pp.label}</span></div><span class="pct">${pct}%</span></div>
-        <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${Math.min(100,pct)}%"></span></div>
-        <div class="m-stats">${stat('Protein',t.p,g.p,'var(--pro)')}${stat('Carbs',t.c,g.c,'var(--carb)')}${stat('Fat',t.f,g.f,'var(--fat)')}</div>
-      </div>
-      ${cookNote}${snackNote}${faraliNote}${rows}
+      <section class="hero" aria-label="${FULLDAY[mDay]}: ${t.kcal} of ${pp.target} kcal">
+                <div class="hero-top"><div><h2 class="hero-day">${FULLDAY[mDay]}</h2><p class="hero-sub">${sub}</p></div>
+          <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
+        <div class="dial-wrap">${dialSVG(dayParts(mDay,pid),pp.target)}
+          <div class="dial-center"><span class="num" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal</span><span class="pct ${over?'over':''}">${pct}%</span></div></div>
+        <div class="hero-macros">${hm('Protein',t.p,g.p,'var(--pro)')}${hm('Carbs',t.c,g.c,'var(--carb)')}${hm('Fat',t.f,g.f,'var(--fat)')}</div>
+      </section>
+      ${rows}
     </div>
-    <div class="m-foot"><button class="btn-solid" data-gen>${ICON.spark} Generate</button><button class="btn-ghost" id="mReset">↺ Starter plan</button></div>`;
+    <div class="m-foot"><button class="btn-solid" data-gen>✦ Generate</button><button class="btn-ghost" id="mReset">Starter plan</button></div>`;
+  Motion.slide('days',$('#mToday .daystrip'),'day-ind',mDay);
+  const key=pid+'|'+mDay;
+  if(key!==lastSumKey){ Motion.countUp($('#mToday [data-kcal]'),t.kcal,lastSumKcal); Motion.drawDial($('#mToday .dial')); }
+  lastSumKcal=t.kcal; lastSumKey=key;
 }
-function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery list</h2></div>${groceryHTML('m')}`; }
+function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery</h2></div>${groceryHTML('m')}`; }
 function renderMQueue(){
   const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
-    return `<div class="m-item" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'farali':CAT_LABEL[r.cat]} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
+    return `<div class="m-item" style="margin-bottom:8px"><span class="meal-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><button class="m-hit" data-open="${rid}"><span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta">${r.farali?'Farali':CAT_LABEL[r.cat].replace(/^./,c=>c.toUpperCase())} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm ghost" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
-    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week — 1–2 chicken nights, reheatable Sun–Thu dinners, no recipe more than twice.</p>
-    <button class="btn-solid wide gen-big" data-gen>${ICON.spark} Generate plan</button>
-    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Your queue is empty. Browse recipes and tap <b>+ Queue</b> to stage them here.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
+    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week.</p>
+    <button class="btn-solid wide gen-big" data-gen>✦ Generate plan</button>
+    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Nothing queued. Tap <b>+</b> on any recipe in Discover.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
 }
-
-/* ================= bottom sheet pickers ================= */
 function openSheet(ctx,title,html){
   const s=$('#sheet'), wasOpen=s.classList.contains('open');
   $('#sheetCtx').textContent=ctx; $('#sheetTitle').textContent=title; $('#sheetBody').innerHTML=html;
@@ -553,15 +654,27 @@ function renderPlacePicker(){
 function openSlotPicker(key){
   const {d,slot}=parseCtx(key), far=isFarali(selPerson,d)&&(slot==='lunch'||slot==='dinner');
   sheetState={t:'slot',d,slot,far,q:''};
-  openSheet(FULLDAY[d], (far?'Farali ':'')+SLOT_LABEL[slot].toLowerCase(),
-    `<div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off"></div><div id="shList"></div>`);
+  const cur=mealFor(d,slot,selPerson), r0=cur&&!cur.fixed?rec(cur.rid):null;
+  const sug=swapSuggestions(d,slot);
+  const sign=n=>n>0?`+${n}`:`${n}`;
+  const pickRow=(x,extra)=>`<button class="pick" data-pick="${x.r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[x.r.cat]}" aria-hidden="true">${emojiOf(x.r)}</span><span class="tx"><span class="nm">${esc(nameParts(x.r).main)}</span>${sidesHTML(x.r)}<span class="meta">${x.pt.kcal} kcal · ${x.pt.p}g P${extra||''}</span></span><span class="plus" aria-hidden="true">+</span></button>`;
+  const canTrade = !far && slot!=='snack' && !(slot==='lunch' && isLeftoverLunch(d));
+  const trades = canTrade ? DAYS.map((dn,dd)=>{ if(dd===d) return ''; if(slot==='lunch'&&isLeftoverLunch(dd)) return '';
+      const id=state.plan[dd][slot], r=id&&rec(id);
+      return `<button class="pick trade" data-trade="${dd}"><span class="pk-ic day" aria-hidden="true">${dn}</span><span class="tx"><span class="nm">${r?esc(nameParts(r).main):'Empty'}</span><span class="meta">${r?`${FULLDAY[dd]} · trade places`:`Move it to ${FULLDAY[dd]}`}</span></span><span class="plus" aria-hidden="true">⇄</span></button>`; }).join('') : '';
+  openSheet(`${FULLDAY[d]} · ${(far?'farali ':'')+SLOT_LABEL[slot].toLowerCase()}`, r0?'Swap this meal':'Add a meal', `
+    ${r0?`<div class="pick now"><span class="pk-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r0)}</span><span class="tx"><span class="meta">Now</span><span class="nm">${esc(nameParts(r0).main)}</span>${sidesHTML(r0)}</span>${cur.leftover?'':`<button class="m-btn sm ghost" data-shuffle-now>🔀 Shuffle</button>`}</div>`:''}
+    ${sug.length?`<div class="sh-lbl">Suggested <small>similar calories &amp; protein, not already this week</small></div>${sug.map(x=>pickRow(x, r0?` · <b>${sign(x.dk)} kcal · ${sign(x.dp)}g P</b>`:'')).join('')}`:''}
+    ${trades?`<div class="sh-lbl">Trade within the week</div>${trades}`:''}
+    <div class="sh-lbl">Browse all</div>
+    <div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off"></div><div id="shList"></div>`);
   renderSlotList();
 }
 function renderSlotList(){
   const s=sheetState, cat=s.slot==='breakfast'?'breakfast':s.slot==='snack'?'snack':'main', q=s.q.toLowerCase();
   const fits=r=>!r.fixed && (s.far ? r.farali : r.cat===cat) && (!q||(r.name+' '+r.tags.join(' ')+' '+r.cuisine).toLowerCase().includes(q));
   const pslot=s.slot;
-  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}" style="--cat:${CATS[r.cat]}"><span class="tx"><span class="nm">${esc(r.name)}</span><span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
+  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><span class="tx"><span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
   const qd=state.queue.map(id=>rec(id)).filter(r=>r&&fits(r));
   const rest=RECIPES.filter(r=>fits(r)&&!state.queue.includes(r.id));
   const sec=(t,arr)=>arr.length?`<div class="sh-lbl">${t}</div>${arr.map(row).join('')}`:'';
@@ -598,6 +711,12 @@ function openProfile(keep){
     ${acct}
     ${personal?`<div class="pview-row">Personal view — only ${pp.label}’s portions. <button class="btn-ghost" data-familyview>Family view</button></div>`:''}
     <div class="pf-people" ${personal?'hidden':''}>${PEOPLE.map(p=>`<button class="pf-person ${p.id===pid?'active':''}" style="--pc:${p.hex}" data-pfp="${p.id}" aria-pressed="${p.id===pid}"><b>${p.label}</b><small>${p.note} · ${p.target.toLocaleString()}</small></button>`).join('')}</div>
+    <section class="pf-hero" aria-label="This week's average">
+            <span class="k">${pp.label} · daily average this week</span>
+      <span class="num">${A.kcal.toLocaleString()}<small>kcal of ${pp.target.toLocaleString()}</small></span>
+      <span class="s">${A.p}g protein a day · goal ${g.p}g</span>
+      ${sparkline(days.map(t=>t.kcal),{color:'var(--c-snack)'})}
+    </section>
     <div class="seg pf-tabs" role="tablist"><button role="tab" data-ptab="tracker" class="${profTab==='tracker'?'active':''}" aria-selected="${profTab==='tracker'}">Tracker</button><button role="tab" data-ptab="week" class="${profTab==='week'?'active':''}" aria-selected="${profTab==='week'}">This week’s plan</button></div>
     ${profTab==='tracker' ? trackerHTML(pid) : `
     <div class="d-sec"><h3>Targets <small>${esc(pp.goal)}</small></h3><div class="pf-kpis four">
@@ -624,6 +743,8 @@ function openProfile(keep){
       <div class="sh-lbl">Most repeated</div><ul class="pf-list">${top.map(([rid,n])=>`<li><span>${esc(rec(rid).name)}</span><span>×${n}</span></li>`).join('')||'<li><span>Nothing planned yet</span><span></span></li>'}</ul>
       <div class="sh-lbl">Open meals</div><p class="pf-note" style="margin:0">${empty.length?esc(empty.join(' · ')):'Every meal has something planned.'}</p></div>`}
     <div class="d-sec"><h3>Settings</h3>
+      <div class="pf-set"><span>Profile<small class="pf-sub">${Sync.person?`Signed in as ${esc(Sync.person.label)}`:'Whose plan this phone shows'}</small></span><div class="seg">${PEOPLE.map(p=>`<button data-pfp="${p.id}" class="${p.id===pid?'active':''}" aria-pressed="${p.id===pid}"><span class="dot" style="background:${p.hex}"></span>${p.label}</button>`).join('')}</div></div>
+      <div class="pf-set"><span>Appearance</span><div class="seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([v,l])=>`<button data-theme-set="${v}" class="${Theme.get()===v?'active':''}">${l}</button>`).join('')}</div></div>
       <div class="pf-set links"><span>Personal links<small class="pf-sub">Opens straight into one person’s view</small></span><div class="link-list">${PEOPLE.map(p=>`<button class="btn-ghost" data-copylink="${p.id}">${p.label}’s link</button>`).join('')}</div></div>
       <div class="pf-set"><span>Grocery stores<small class="pf-sub">${state.stores.map(x=>esc(x.name)).join(' · ')}</small></span><button class="btn-ghost" data-gmanage>Manage</button></div>
       <div class="pf-set"><span>Weekly snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>
@@ -633,12 +754,22 @@ function openProfile(keep){
 }
 
 /* ================= render all ================= */
+const SUN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>';
+const MOON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>';
+function renderThemeBtns(){
+  const dark=Theme.effective()==='dark';
+  document.querySelectorAll('[data-theme-toggle]').forEach(b=>{ b.innerHTML=dark?SUN:MOON; b.setAttribute('aria-label',dark?'Switch to light mode':'Switch to dark mode'); });
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('[data-theme-toggle]')){ Motion.transition(()=>{ Theme.toggle(); renderEverything(); }); return; }
+  const t=e.target.closest('[data-theme-set]'); if(t){ Motion.transition(()=>{ Theme.set(t.dataset.themeSet); renderEverything(); }); }
+});
 function renderPview(){
   const html = personal ? `<span><b>${esc(personById(personal).label)}’s view</b> · only ${esc(personById(personal).label)}’s portions</span><button class="btn-ghost" data-familyview>Family view</button>` : '';
   $('#pviewD').innerHTML=html; $('#pviewM').innerHTML=html;
 }
 function renderEverything(){
-  renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
+  renderThemeBtns(); renderBells(); renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
   if(drawerView && drawerView.t!=='form') refreshDrawer();
   if(sheetState){ if(sheetState.t==='place') renderPlacePicker(); else renderSlotList(); }
 }
@@ -653,8 +784,8 @@ $('#search').addEventListener('input',e=>{ query=e.target.value; renderLib(); re
 $('#syncBox').addEventListener('click',e=>{ if(e.target.closest('[data-signin]')) Sync.signIn(); if(e.target.closest('[data-signout]')) Sync.signOut(); });
 $('#dashBtn').addEventListener('click',()=>openProfile());
 $('#lib').addEventListener('click',e=>{
-  const a=e.target.closest('[data-addq]'); if(a) return toggleQueue(a.dataset.addq);
-  const card=e.target.closest('.rc[data-rid]'); if(card) openDrawer(card.dataset.rid,null);
+  const a=e.target.closest('[data-addq]'); if(a) return addToPlan(a,a.dataset.addq);
+  const op=e.target.closest('[data-open]'); if(op) openDrawer(op.dataset.open,null);
 });
 $('#qstrip').addEventListener('click',e=>{
   const rm=e.target.closest('[data-deq]'); if(rm){ state.queue.splice(+rm.dataset.deq,1); armed=null; return commit(); }
@@ -674,11 +805,15 @@ $('#cal').addEventListener('click',e=>{
   if(cell) return openSlotPicker(cell.dataset.drop);
 });
 let dragRid=null;
-document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; dragRid=src.dataset.rid; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
+let dragCtx=null;
+document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; dragRid=src.dataset.rid; dragCtx=src.dataset.ctx||null; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
 document.addEventListener('dragover',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); e.dataTransfer.dropEffect='copy'; cell.classList.add('drop-hover'); });
 document.addEventListener('dragleave',e=>{ const cell=e.target.closest('[data-drop]'); if(cell) cell.classList.remove('drop-hover'); });
 document.addEventListener('drop',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); cell.classList.remove('drop-hover');
-  const rid=e.dataTransfer.getData('text/plain')||dragRid; if(!rid) return; const c=parseCtx(cell.dataset.drop); setMealView(c.d,c.slot,rid); dragRid=null; });
+  const rid=e.dataTransfer.getData('text/plain')||dragRid; if(!rid) return; const c=parseCtx(cell.dataset.drop);
+  const src=dragCtx&&parseCtx(dragCtx); dragRid=null; dragCtx=null;
+  if(src && src.slot===c.slot && src.d!==c.d && ['breakfast','lunch','dinner'].includes(c.slot) && !isFarali(selPerson,c.d) && !isFarali(selPerson,src.d)) return tradeMeals(src.d,c.d,c.slot);
+  setMealView(c.d,c.slot,rid); });
 $('#drawerX').addEventListener('click',closeDrawer);
 $('#scrim').addEventListener('click',closeDrawer);
 $('#drawerBody').addEventListener('click',e=>{
@@ -686,7 +821,7 @@ $('#drawerBody').addEventListener('click',e=>{
   if(b=q('[data-dswap]')) return openSlotPicker(b.dataset.dswap);
   if(b=q('[data-dlock]')){ const c=parseCtx(b.dataset.dlock); return toggleLock(c.d,c.slot); }
   if(b=q('[data-dremove]')){ const c=parseCtx(b.dataset.dremove); closeDrawer(); return removeMealView(c.d,c.slot); }
-  if(b=q('[data-dq]')) return toggleQueue(b.dataset.dq);
+  if(b=q('[data-dq]')) return addToPlan(b,b.dataset.dq);
   if(b=q('[data-dplan]')) return openPlacePicker(b.dataset.dplan);
   if(b=q('[data-pfp]')) return setPerson(b.dataset.pfp);
   if(b=q('[data-pfday]')){ mDay=+b.dataset.pfday; closeDrawer(); if(isMobile()) setTab('today'); else jumpTo(mDay+'|dinner'); return; }
@@ -713,11 +848,13 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-goto]')) return setTab(b.dataset.goto);
   if(b=q('[data-mp]')) return setPerson(b.dataset.mp);
   if(q('#mProfile')) return openProfile();
-  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); return renderEverything(); }
+  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); renderEverything(); return Motion.enter(document.querySelectorAll('#mLib .m-card'),{max:6}); }
   if(b=q('[data-cu]')){ cuisine=b.dataset.cu; renderFilters(); return renderEverything(); }
-  if(b=q('[data-mq]')) return toggleQueue(b.dataset.mq);
+  if(b=q('[data-mq]')) return addToPlan(b,b.dataset.mq);
+  if(b=q('[data-addq]')) return addToPlan(b,b.dataset.addq);
   if(b=q('[data-plan]')) return openPlacePicker(b.dataset.plan);
   if(b=q('[data-mswap]')) return openSlotPicker(b.dataset.mswap);
+  if(b=q('[data-mshuffle]')){ const c=parseCtx(b.dataset.mshuffle); return shuffleMeal(c.d,c.slot); }
   if(b=q('[data-mlock]')){ const c=parseCtx(b.dataset.mlock); return toggleLock(c.d,c.slot); }
   if(b=q('[data-mremove]')){ const c=parseCtx(b.dataset.mremove); return removeMealView(c.d,c.slot); }
   if(b=q('[data-uselo]')) return useLeftovers(+b.dataset.uselo);
@@ -736,10 +873,18 @@ $('#mApp').addEventListener('click',e=>{
 });
 $('#mApp').addEventListener('change',e=>{ if(onGroceryChange(e)) renderEverything(); });
 $('#mSearch').addEventListener('input',e=>{ query=e.target.value; $('#search').value=query; renderLib(); renderMDiscover(); });
-(()=>{ let sx=0,sy=0,st=0; const el=$('#mToday');
-  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; st=Date.now(); },{passive:true});
+(()=>{ let sx=0,sy=0,st=0,dragging=false,body=null; const el=$('#mToday');
+  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; st=Date.now(); dragging=false; body=el.querySelector('.m-daybody'); },{passive:true});
+  el.addEventListener('touchmove',e=>{
+    if(!body||Motion.reduced()) return; const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(!dragging && Math.abs(dx)>12 && Math.abs(dx)>Math.abs(dy)*1.4) dragging=true;
+    if(dragging){ body.style.transition='none'; body.style.transform=`translateX(${dx*0.85}px)`; body.style.opacity=String(1-Math.min(.35,Math.abs(dx)/900)); }
+  },{passive:true});
   el.addEventListener('touchend',e=>{ const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy;
-    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6 && Date.now()-st<700){ const dir=dx<0?1:-1; mDay=(mDay+dir+7)%7; renderMToday(dir); } },{passive:true});
+    const go=Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.4 && Date.now()-st<900;
+    if(go){ const dir=dx<0?1:-1; mDay=(mDay+dir+7)%7; renderMToday(dir); }
+    else if(body && dragging){ body.style.transition='transform 260ms cubic-bezier(.16,1,.3,1),opacity 200ms'; body.style.transform=''; body.style.opacity=''; }
+    dragging=false; },{passive:true});
 })();
 $('#sheet').addEventListener('click',e=>{
   const q=s=>e.target.closest(s); let b;
@@ -835,3 +980,136 @@ setInterval(()=>{ if(activeWeekStart()>state.weekStart){ rolledChecked=false; ma
 
 // local-only visitors (or Firebase unavailable): don't wait for a sync that will never come
 setTimeout(()=>{ if(!Sync.user) maybeRollover(); },3000);
+
+/* ================= notifications ================= */
+var NOTE_KEY='mp_notes_read';                     // per phone: {noteId: true}
+var noteRead;   // loaded lazily: the first render runs before this file finishes loading
+var BELL='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5a6 6 0 0 1 12 0c0 5.5 2 7 2 7H4s2-1.5 2-7"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></svg>';
+// everything the family should be told this week, up to today, newest first
+function notifications(){
+  const ws=state.weekStart, pid=selPerson, pp=person(), out=[];
+  const g=buildGrocery().items.length;
+  const planned=DAYS.reduce((n,_,d)=>n+MEAL_SLOTS.filter(s=>mealFor(d,s,pid)).length,0);
+  out.push({id:`week-${ws}`, day:-1, e:'🗓️', bk:'var(--surface)', title:`Week of ${dayDate(0)} is planned`,
+    body:`${planned} meals for ${pp.label}, and ${g} items on the grocery list.`, go:'grocery'});
+  const sn=rec(state.snack.rid), sb=snackBatch();
+  if(sn) out.push({id:`snack-${ws}`, day:-1, e:emojiOf(sn), bk:'var(--c-breakfast)', title:`Snack box: ${sn.name}`,
+    body:`Prep ${sb?sb.servings:0} servings on Sunday. It keeps ${sn.keeps||'a week'}.`, open:sn.id});
+  for(let d=0; d<=TODAY_IDX; d++){
+    const b=batchFor(d,'dinner'); if(!b) continue; const r=rec(b.rid);
+    const lunch=b.parts.some(p=>p.leftover);
+    out.push({id:`cook-${ws}-${d}`, day:d, e:emojiOf(r), bk:'var(--c-snack)',
+      title: d===TODAY_IDX ? 'Cook tonight' : `${FULLDAY[d]}’s dinner`,
+      body:`${niceCount(b.servings)} servings of ${shortName(r)}.${lunch?` That covers ${FULLDAY[nextDay(d)]}’s lunch too.`:''}`, ctx:`${d}|dinner`, rid:b.rid});
+  }
+  if(TODAY_IDX>=FARALI.day-1){
+    const fl=rec(state.farali.lunch), fd=rec(state.farali.dinner);
+    out.push({id:`farali-${ws}`, day:FARALI.day-1, e:'🌾', bk:'var(--c-lunch)',
+      title: pid===FARALI.pid ? 'Your farali day is Thursday' : 'Aum eats farali on Thursday',
+      body:`${fl?shortName(fl):'Nothing yet'} for lunch, ${fd?shortName(fd):'nothing yet'} for dinner.`, ctx:`${FARALI.day}|lunch`});
+  }
+  out.sort((a,b)=>b.day-a.day);
+  const nm=id=>{ const r=rec(id); return r?nameParts(r).main:'nothing'; };
+  const ago=t=>{ const m=Math.round((Date.now()-t)/6e4); return m<1?'Just now':m<60?`${m} min ago`:m<1440?`${Math.round(m/60)} h ago`:`${Math.round(m/1440)} d ago`; };
+  const changes=(state.changes||[]).map(c=>{
+    const where = c.slot==='snack' ? 'Snack box' : `${FULLDAY[c.d]} ${SLOT_LABEL[c.slot].toLowerCase()}${c.who?` (${c.who})`:''}`;
+    if(c.kind==='trade'){
+      const title = c.to ? `Traded ${SLOT_LABEL[c.slot].toLowerCase()}: ${DAYS[c.d]} ⇄ ${DAYS[c.d2]}` : `Moved ${SLOT_LABEL[c.slot].toLowerCase()}: ${DAYS[c.d]} → ${DAYS[c.d2]}`;
+      const body = c.to ? `${nm(c.from)} is now ${FULLDAY[c.d2]}, ${nm(c.to)} is now ${FULLDAY[c.d]} · by ${c.by}` : `${nm(c.from)} moved to ${FULLDAY[c.d2]} · by ${c.by}`;
+      return {id:c.id, day:99, e:'⇄', bk:'var(--c-shake)', title, body, when:ago(c.at), ctx:`${c.d2}|${c.slot}`};
+    }
+    const what = c.from&&c.to ? `${nm(c.from)} → ${nm(c.to)}` : c.to ? `Added ${nm(c.to)}` : `Removed ${nm(c.from)}`;
+    return {id:c.id, day:99, e:'🔄', bk:'var(--c-shake)', title:`${c.from&&c.to?'Swapped':c.to?'Added to':'Cleared'} ${where}`, body:`${what} · by ${c.by}`, when:ago(c.at), rid:c.to||c.from, ctx: c.slot==='snack'?null:`${c.d}|${c.slot}`};
+  });
+  return changes.concat(out);
+}
+function reads(){ return noteRead || (noteRead = store.get('mp_notes_read') || {}); }
+function unreadCount(){ const r=reads(); return notifications().filter(n=>!r[n.id]).length; }
+function renderBells(){
+  const n=unreadCount();
+  document.querySelectorAll('[data-notes]').forEach(b=>{
+    b.innerHTML=(BELL||'')+(n?'<i class="bell-dot" aria-hidden="true"></i>':'');
+    b.setAttribute('aria-label', n ? `Notifications, ${n} unread` : 'Notifications');
+  });
+}
+function setRead(id,v){ reads(); if(v) noteRead[id]=true; else delete noteRead[id]; store.set(NOTE_KEY,noteRead); }
+function openNotes(keep){
+  reads(); const list=notifications(), n=list.filter(x=>!noteRead[x.id]).length;
+  drawerView={t:'notes'};
+  $('#drawerBody').innerHTML=`
+    <div class="d-ctx">${n?`${n} unread`:'All caught up'} · week of ${dayDate(0)}</div>
+    <h2 class="d-name">Notifications</h2>
+    ${n?`<div class="slot-acts"><button class="m-btn ghost" data-notes-all>Mark all as read</button></div>`:''}
+    <div class="notes-list">${list.map(x=>{ const unread=!noteRead[x.id];
+      return `<article class="notif ${unread?'unread':''}" style="--bk:${x.bk}">
+        <button class="notif-main" data-note-open="${x.id}">
+          <span class="notif-e" aria-hidden="true">${x.e}</span>
+          <span class="notif-tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span><small>${x.when||(x.day<0?'This week':x.day===TODAY_IDX?'Today':FULLDAY[x.day])}</small></span>
+        </button>
+        <button class="notif-mark" data-note-toggle="${x.id}" aria-label="${unread?'Mark as read':'Mark as unread'}" title="${unread?'Mark as read':'Mark as unread'}">${unread?'<i class="unread-dot"></i>':'<i class="read-ring"></i>'}</button>
+      </article>`; }).join('')}</div>`;
+  openShell(keep);
+}
+document.addEventListener('click',e=>{
+  let b;
+  if(e.target.closest('[data-notes]')) return openNotes();
+  if(e.target.closest('[data-notes-all]')){ notifications().forEach(x=>setRead(x.id,true)); renderBells(); return openNotes(true); }
+  if(b=e.target.closest('[data-note-toggle]')){ const id=b.dataset.noteToggle; setRead(id,!reads()[id]); renderBells(); return openNotes(true); }
+  if(b=e.target.closest('[data-note-open]')){
+    const x=notifications().find(n=>n.id===b.dataset.noteOpen); if(!x) return;
+    setRead(x.id,true); renderBells();
+    if(x.go){ closeDrawer(); if(isMobile()) return setTab(x.go); return openGrocery(); }
+    if(x.rid) return openDrawer(x.rid,x.ctx);
+    if(x.open) return openDrawer(x.open,null);
+    if(x.ctx) return jumpTo(x.ctx);
+  }
+});
+renderBells();
+
+$('#sheet').addEventListener('click',e=>{
+  if(!sheetState||sheetState.t!=='slot') return;
+  let b;
+  if(b=e.target.closest('[data-trade]')){ const {d,slot}=sheetState; closeSheet(); return tradeMeals(d,+b.dataset.trade,slot); }
+  if(e.target.closest('[data-shuffle-now]')){ const {d,slot}=sheetState; closeSheet(); return shuffleMeal(d,slot,sheetState&&sheetState.far?FARALI.pid:selPerson); }
+});
+
+/* ---- long-press a meal on Today, drop it on a day in the strip ---- */
+let mealDrag=null, suppressClick=false;
+(()=>{
+  const root=$('#mToday'); let timer=null, sx=0, sy=0;
+  const target=(x,y)=>{ const el=document.elementFromPoint(x,y); return el&&el.closest('.ds-day'); };
+  function begin(item,x,y){
+    const r=item.getBoundingClientRect(), {d,slot}=parseCtx(item.dataset.key);
+    const ghost=item.cloneNode(true); ghost.classList.add('drag-ghost');
+    Object.assign(ghost.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px'});
+    document.body.appendChild(ghost); item.classList.add('drag-src'); document.body.classList.add('meal-dragging');
+    mealDrag={item,ghost,d,slot,ox:x,oy:y,over:null};
+    try{ navigator.vibrate&&navigator.vibrate(12); }catch(e){}
+    toast(`Drop on a day to move ${SLOT_LABEL[slot].toLowerCase()} there`);
+  }
+  function move(x,y){
+    const m=mealDrag; m.ghost.style.transform=`translate(${x-m.ox}px,${y-m.oy}px) scale(.96) rotate(-1.5deg)`;
+    const t=target(x,y); if(m.over&&m.over!==t) m.over.classList.remove('drop-target');
+    if(t && +t.dataset.day!==m.d){ t.classList.add('drop-target'); m.over=t; } else m.over=null;
+  }
+  function end(drop){
+    const m=mealDrag; mealDrag=null; if(!m) return;
+    m.ghost.remove(); m.item.classList.remove('drag-src'); document.body.classList.remove('meal-dragging');
+    if(m.over) m.over.classList.remove('drop-target');
+    suppressClick=true; setTimeout(()=>suppressClick=false,350);
+    if(drop && m.over) tradeMeals(m.d,+m.over.dataset.day,m.slot);
+  }
+  root.addEventListener('pointerdown',e=>{
+    if(e.button>0) return; const item=e.target.closest('.m-item.can-drag'); if(!item||e.target.closest('.m-acts')) return;
+    sx=e.clientX; sy=e.clientY; clearTimeout(timer); timer=setTimeout(()=>{ timer=null; begin(item,sx,sy); },430);
+  });
+  document.addEventListener('pointermove',e=>{
+    if(timer && (Math.abs(e.clientX-sx)>8||Math.abs(e.clientY-sy)>8)){ clearTimeout(timer); timer=null; }
+    if(mealDrag) move(e.clientX,e.clientY);
+  });
+  document.addEventListener('pointerup',()=>{ clearTimeout(timer); timer=null; if(mealDrag) end(true); });
+  document.addEventListener('pointercancel',()=>{ clearTimeout(timer); timer=null; if(mealDrag) end(false); });
+  root.addEventListener('touchmove',e=>{ if(mealDrag) e.preventDefault(); },{passive:false});
+  root.addEventListener('contextmenu',e=>{ if(e.target.closest('.m-item.can-drag')) e.preventDefault(); });
+  document.addEventListener('click',e=>{ if(suppressClick){ e.stopPropagation(); e.preventDefault(); suppressClick=false; } },true);
+})();
