@@ -651,9 +651,9 @@ input[type=checkbox]:active{transform:scale(.9)}
 .tile-name{padding-right:0;hyphens:none;overflow-wrap:normal;word-break:normal}
 .tile:not(.feature):not(.wide) .tile-name{font-size:21px}
 .tile .tile-meta,.tile .tile-sub:last-of-type{padding-right:46px}
-/* tab bar: Electric Sapphire in both themes */
-.m-tabs{background:#4164FF}
-.m-tab{color:rgba(255,255,255,.78)}
-.m-tab.active{color:#4164FF}
+/* tab bar: Maya Blue in both themes (dark text for contrast on the light blue) */
+.m-tabs{background:#7CC3FF}
+.m-tab{color:rgba(13,13,14,.7)}
+.m-tab.active{color:#0D0D0E}
 .m-tabs .tab-ind{background:#FFFFFF}
-.m-badge{box-shadow:0 0 0 2px #4164FF}
+.m-badge{box-shadow:0 0 0 2px #7CC3FF}
