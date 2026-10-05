@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function isFamily() {
+      return signedIn() && request.auth.token.email in [
+        'pateldvija20@gmail.com',
+        'axr230102@gmail.com',
+        'aumsathwara2811@gmail.com'
+      ];
+    }
+
+    // Shared family plan, queue, groceries, custom recipes
+    match /family/{docId} {
+      allow read, write: if isFamily();
+    }
+
+    // Per-person trackers: the family can read each other's progress, only you can edit yours
+    match /trackers/{personKey}/{rest=**} {
+      allow read: if isFamily();
+      allow write: if isFamily() && (
+        (personKey == 'dvija'  && request.auth.token.email == 'pateldvija20@gmail.com') ||
+        (personKey == 'akshar' && request.auth.token.email == 'axr230102@gmail.com') ||
+        (personKey == 'aum'    && request.auth.token.email == 'aumsathwara2811@gmail.com'));
+    }
+
+    // Private data (e.g. Dvija's cycle log): owner only
+    match /private/{email}/{rest=**} {
+      allow read, write: if isFamily() && request.auth.token.email == email;
+    }
+
+    // Everything else is closed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

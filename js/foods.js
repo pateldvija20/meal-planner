@@ -1,0 +1,83 @@
+/* Food composition table — values per 100 g (or 100 ml), approximate, from USDA FoodData Central / IFCT 2017.
+   n = [kcal, protein g, carbs g, fat g, fibre g, iron mg, calcium mg, magnesium mg, potassium mg, B12 mcg, vitamin D mcg]
+   each = grams per counted unit (egg, banana…); cat = grocery aisle; store = default store id. */
+const STORES_DEFAULT = [
+  {id:'costco',  name:'Costco'},
+  {id:'walmart', name:'Walmart'},
+  {id:'apni',    name:'Apni Mandi'},
+];
+const F = (name,cat,store,n,each) => ({name,cat,store,n,each:each||null});
+const DAIRY='Proteins & dairy', PROD='Produce', GRAIN='Grains & legumes', NUTS='Nuts, seeds & spreads', PANTRY='Pantry & supplements';
+const FOODS = {
+  // proteins & dairy
+  egg:        F('Eggs',DAIRY,'costco',[143,12.6,0.7,9.5,0,1.75,56,12,138,0.9,2.0],50),
+  paneer:     F('Paneer',DAIRY,'costco',[265,18.3,1.2,20.8,0,0.2,480,8,100,0.8,0.2]),
+  tofu:       F('Firm tofu',DAIRY,'costco',[144,17.3,2.8,8.7,2.3,2.7,683,58,237,0,0]),
+  curd:       F('Curd (plain yogurt)',DAIRY,'costco',[61,3.5,4.7,3.3,0,0.05,121,12,155,0.37,0.1]),
+  greek:      F('Greek yogurt (non-fat)',DAIRY,'costco',[59,10.2,3.6,0.4,0,0.1,110,11,141,0.75,0]),
+  milk:       F('Milk (2%)',DAIRY,'costco',[50,3.3,4.8,2.0,0,0,120,11,140,0.5,1.2]),
+  feta:       F('Feta',DAIRY,'costco',[264,14.2,4.1,21.3,0,0.65,493,19,62,1.7,0.4]),
+  mozzarella: F('Mozzarella (part-skim)',DAIRY,'costco',[254,24.3,2.8,15.9,0,0.2,782,23,95,2.3,0.3]),
+  butter:     F('Butter',DAIRY,'costco',[717,0.9,0.1,81,0,0,24,2,24,0.2,1.5]),
+  ghee:       F('Ghee',DAIRY,'apni',[900,0,0,100,0,0,4,0,5,0,0]),
+  whey:       F('Whey protein',PANTRY,'costco',[400,80,10,5,0,1,400,60,500,0.6,0]),
+  collagen:   F('Collagen peptides',PANTRY,'costco',[360,90,0,0,0,0,10,5,10,0,0]),
+  creatine:   F('Creatine monohydrate',PANTRY,'costco',[0,0,0,0,0,0,0,0,0,0,0]),
+  chicken:    F('Chicken breast (boneless)',DAIRY,'costco',[120,22.5,0,2.6,0,0.4,5,28,334,0.2,0.1]),
+  // produce
+  onion:      F('Onion',PROD,'walmart',[40,1.1,9.3,0.1,1.7,0.2,23,10,146,0,0]),
+  tomato:     F('Tomato',PROD,'walmart',[18,0.9,3.9,0.2,1.2,0.3,10,11,237,0,0]),
+  spinach:    F('Spinach',PROD,'walmart',[23,2.9,3.6,0.4,2.2,2.7,99,79,558,0,0]),
+  cucumber:   F('Cucumber',PROD,'walmart',[15,0.7,3.6,0.1,0.5,0.3,16,13,147,0,0]),
+  potato:     F('Potato',PROD,'walmart',[77,2.0,17,0.1,2.2,0.8,12,23,425,0,0]),
+  sweetpotato:F('Sweet potato',PROD,'walmart',[86,1.6,20,0.1,3.0,0.6,30,25,337,0,0]),
+  cauliflower:F('Cauliflower',PROD,'walmart',[25,1.9,5.0,0.3,2.0,0.4,22,15,299,0,0]),
+  broccoli:   F('Broccoli',PROD,'walmart',[34,2.8,6.6,0.4,2.6,0.7,47,21,316,0,0]),
+  capsicum:   F('Capsicum (bell pepper)',PROD,'walmart',[26,1.0,6.0,0.3,2.1,0.4,7,12,211,0,0]),
+  mushroom:   F('Mushrooms',PROD,'walmart',[22,3.1,3.3,0.3,1.0,0.5,3,9,318,0,0.2]),
+  carrot:     F('Carrot',PROD,'walmart',[41,0.9,9.6,0.2,2.8,0.3,33,12,320,0,0]),
+  peas:       F('Green peas (frozen)',PROD,'costco',[77,5.2,13.6,0.4,4.5,1.5,24,22,153,0,0]),
+  corn:       F('Sweet corn (frozen)',PROD,'costco',[88,3.0,19,1.2,2.0,0.5,3,25,218,0,0]),
+  mixveg:     F('Mixed vegetables (frozen)',PROD,'costco',[45,2.4,9,0.3,3.0,0.8,30,20,200,0,0]),
+  berries:    F('Mixed berries (frozen)',PROD,'costco',[50,0.7,12,0.3,2.4,0.4,10,10,100,0,0]),
+  avocado:    F('Avocado',PROD,'costco',[160,2.0,8.5,14.7,6.7,0.55,12,29,485,0,0],150),
+  banana:     F('Banana',PROD,'walmart',[89,1.1,22.8,0.3,2.6,0.26,5,27,358,0,0],118),
+  lemon:      F('Lemon juice',PROD,'walmart',[22,0.4,6.9,0.2,0.3,0.1,6,6,103,0,0]),
+  sprouts:    F('Sprouted moong',PROD,'apni',[30,3.0,6.0,0.2,1.8,0.9,13,21,149,0,0]),
+  // grains & legumes
+  moong:      F('Moong dal',GRAIN,'apni',[348,24.5,59,1.2,16,4.4,75,190,1250,0,0]),
+  toor:       F('Toor dal',GRAIN,'apni',[343,22,63,1.5,15,5.0,73,180,1390,0,0]),
+  urad:       F('Whole urad',GRAIN,'apni',[341,25,59,1.6,18,7.6,138,267,983,0,0]),
+  chana:      F('Kabuli chana',GRAIN,'apni',[364,19,61,6.0,17,6.2,105,115,875,0,0]),
+  rajma:      F('Rajma',GRAIN,'apni',[333,24,60,0.8,25,8.2,143,140,1406,0,0]),
+  matki:      F('Matki (moth beans)',GRAIN,'apni',[343,23,62,1.6,10,10.9,150,381,1191,0,0]),
+  pinto:      F('Pinto beans',GRAIN,'walmart',[347,21,63,1.2,15.5,5.1,113,176,1393,0,0]),
+  blackbean:  F('Black beans',GRAIN,'walmart',[341,21.6,62,1.4,15.5,5.0,123,171,1483,0,0]),
+  besan:      F('Besan',GRAIN,'apni',[387,22,58,6.7,10.8,4.9,45,166,846,0,0]),
+  brownrice:  F('Brown rice',GRAIN,'costco',[362,7.5,76,2.7,3.4,1.5,33,143,268,0,0]),
+  oats:       F('Rolled oats',GRAIN,'costco',[389,16.9,66,6.9,10.6,4.7,54,177,429,0,0]),
+  poha:       F('Poha',GRAIN,'apni',[346,6.6,77,1.2,2.5,4.0,20,40,150,0,0]),
+  atta:       F('Whole wheat atta',GRAIN,'apni',[340,13,72,2.5,10.7,3.6,34,137,363,0,0]),
+  dosabatter: F('Dosa batter',GRAIN,'apni',[140,4.5,29,0.5,1.5,1.0,15,30,120,0,0]),
+  bread:      F('Whole-grain bread',GRAIN,'walmart',[252,12.4,43,3.5,6.0,2.5,160,75,250,0,0],30),
+  pav:        F('Whole-wheat pav',GRAIN,'apni',[250,9,45,4,6,2.5,80,60,200,0,0],40),
+  subroll:    F('Whole-wheat sub roll',GRAIN,'walmart',[250,10,45,3.5,6,2.5,100,60,200,0,0],75),
+  pizzabase:  F('Whole-wheat pizza base',GRAIN,'walmart',[260,9,46,4,6,2.5,30,60,180,0,0]),
+  pasta:      F('Whole-wheat pasta',GRAIN,'walmart',[348,14.6,73,1.4,9,3.6,40,143,363,0,0]),
+  sabudana:   F('Sabudana',GRAIN,'apni',[358,0.2,89,0,0.9,1.6,20,1,11,0,0]),
+  samo:       F('Samo (barnyard millet)',GRAIN,'apni',[330,10,65,3.5,10,5.0,20,80,200,0,0]),
+  rajgira:    F('Rajgira (amaranth) flour',GRAIN,'apni',[371,13.6,65,7,6.7,7.6,159,248,508,0,0]),
+  // nuts, seeds, spreads
+  peanuts:    F('Peanuts',NUTS,'costco',[567,25.8,16,49,8.5,4.6,92,168,705,0,0]),
+  pb:         F('Peanut butter',NUTS,'costco',[588,25,20,50,6,1.9,43,154,649,0,0]),
+  almondbutter:F('Almond butter',NUTS,'costco',[614,21,19,56,10,3.5,347,279,748,0,0]),
+  chia:       F('Chia seeds',NUTS,'costco',[486,16.5,42,30.7,34.4,7.7,631,335,407,0,0]),
+  flax:       F('Flax seeds',NUTS,'costco',[534,18.3,29,42,27.3,5.7,255,392,813,0,0]),
+  basil:      F('Basil seeds (sabja)',NUTS,'apni',[330,14,50,13,40,9.0,300,300,400,0,0]),
+  // pantry
+  oil:        F('Cooking oil',PANTRY,'costco',[884,0,0,100,0,0,0,0,0,0,0]),
+  honey:      F('Honey',PANTRY,'costco',[304,0.3,82,0,0.2,0.4,6,2,52,0,0]),
+  passata:    F('Tomato passata',PANTRY,'walmart',[30,1.5,5.5,0.2,1.5,1.0,20,15,350,0,0]),
+  olives:     F('Olives',PANTRY,'walmart',[115,0.8,6,11,3.2,3.3,88,4,8,0,0]),
+};
+const NKEYS = ['kcal','p','c','f','fib','fe','ca','mg','k','b12','d'];
