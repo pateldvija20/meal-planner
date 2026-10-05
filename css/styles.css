@@ -689,3 +689,24 @@ input[type=checkbox]:active{transform:scale(.9)}
 .chip .sides{grid-column:2;margin:2px 0 0;gap:3px}
 .chip .side{font-size:11px;padding:1px 7px}
 .tile .sides{margin-top:6px}
+/* swapping */
+.toast.actionable{pointer-events:auto;display:flex;align-items:center;gap:14px;padding:8px 8px 8px 18px}
+.toast-act{border:0;border-radius:999px;background:var(--inv-ink);color:var(--inv-bg);font-weight:800;font-size:14px;padding:8px 14px}
+.m-acts .m-ic{width:36px;height:40px}
+.m-acts .m-ic svg{width:19px;height:19px}
+.pick.now{cursor:default;background:var(--surface-2);gap:12px}
+.pick.now .meta{font-weight:700;font-size:12.5px}
+.pick.now .m-btn{flex:0 0 auto}
+.pick.trade .pk-ic.day{background:var(--surface-2);font-size:13px;font-weight:800}
+.pick .meta b{font-weight:800;color:var(--ink-2)}
+.sh-lbl small{font-weight:500;color:var(--ink-3);font-size:12.5px;margin-left:4px}
+/* day strip stays pinned so you can drop a dragged meal on a day */
+.daystrip{position:sticky;top:calc(62px + env(safe-area-inset-top));z-index:15;background:var(--bg);padding:6px 0}
+.daystrip .day-ind{top:6px;bottom:6px}
+.m-item.can-drag{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.m-item.drag-src{opacity:.35}
+.drag-ghost{position:fixed;z-index:95;pointer-events:none;margin:0;box-shadow:var(--shadow-float);transition:none}
+body.meal-dragging{-webkit-user-select:none;user-select:none}
+body.meal-dragging .ds-day{box-shadow:inset 0 0 0 1.5px var(--line-2)}
+.ds-day.drop-target{background:var(--accent)!important;box-shadow:none!important}
+.ds-day.drop-target .ds-name,.ds-day.drop-target .ds-num{color:#fff!important}

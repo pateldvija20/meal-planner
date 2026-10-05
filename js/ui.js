@@ -25,7 +25,16 @@ const defSlot=r=>r.cat==='breakfast'?'breakfast':r.cat==='snack'?'snack':'dinner
 const isLocked=(d,slot)=>slot==='snack'?!!state.snack.locked:!!state.plan[d].locks[slot];
 const shortName=r=>r.name.split('(')[0].trim();
 let toastT;
-function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1900); }
+function toast(msg,opts){
+  const t=$('#toast'); clearTimeout(toastT);
+  if(opts&&opts.action){
+    t.innerHTML=`<span>${esc(msg)}</span><button class="toast-act" type="button">${esc(opts.action)}</button>`;
+    t.classList.add('actionable');
+    t.querySelector('.toast-act').onclick=()=>{ t.classList.remove('show','actionable'); clearTimeout(toastT); opts.onAction&&opts.onAction(); };
+  } else { t.textContent=msg; t.classList.remove('actionable'); }
+  t.classList.add('show');
+  toastT=setTimeout(()=>t.classList.remove('show','actionable'), opts&&opts.action ? 5000 : 1900);
+}
 function fmtQty(q,u){
   if(q==null) return '';
   if(units==='us'){
@@ -51,12 +60,57 @@ const ICON={
   unlock:`<svg ${SV}><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>`,
   swap:`<svg ${SV}><path d="M7 4 3.5 7.5 7 11M3.5 7.5H17M17 13l3.5 3.5L17 20M20.5 16.5H7"/></svg>`,
   check:`<svg ${SV}><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>`,
+  shuffle:`<svg ${SV}><path d="M3 6.5h3.5c2.5 0 3.8 1.2 5.2 3.6l1.6 2.8c1.4 2.4 2.7 3.6 5.2 3.6H21M17.5 4l3.5 2.5-3.5 2.5M3 17.5h3.5c1.6 0 2.7-.5 3.6-1.5M14.4 8c.9-1 2-1.5 3.6-1.5M17.5 15l3.5 2.5-3.5 2.5"/></svg>`,
   spark:`<svg ${SV}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>`,
 };
 
 /* ================= mutations ================= */
 function commit(){ saveState(); renderEverything(); }
 const parseCtx=k=>{ const [d,slot]=k.split('|'); return {d:+d,slot}; };
+/* ================= swapping ================= */
+// alternatives with similar calories & protein that aren't already planned this week
+function swapSuggestions(d,slot,pid=selPerson,n=3){
+  const cur=mealFor(d,slot,pid), r0=cur&&rec(cur.rid), far=isFarali(pid,d)&&(slot==='lunch'||slot==='dinner');
+  const cat = slot==='breakfast'?'breakfast':slot==='snack'?'snack':'main';
+  const tgt = r0 ? portion(r0.id,pid,slot,d) : {kcal:slotBudget(pid,slot)||400,p:0};
+  const used=new Set(); DAYS.forEach((_,dd)=>MEAL_SLOTS.forEach(sl=>{ const m=mealFor(dd,sl); if(m) used.add(m.rid); }));
+  return RECIPES.filter(r=>!r.fixed && (far ? (r.farali&&r.cat==='main') : (r.cat===cat && !r.farali))
+      && (!r0||r.id!==r0.id) && !used.has(r.id)
+      && !(slot==='dinner' && needsLeftover(d) && !r.leftover)
+      && !(r.protein && NO_CHICKEN_DAYS.includes(d)))
+    .map(r=>{ const pt=portion(r.id,pid,slot,d);
+      const score=Math.abs(pt.kcal-tgt.kcal)/Math.max(1,tgt.kcal) + (tgt.p?Math.abs(pt.p-tgt.p)/Math.max(20,tgt.p)*0.8:0) - (isPcodFriendly(r)?0.06:0);
+      return {r,pt,score,dk:pt.kcal-tgt.kcal,dp:pt.p-(tgt.p||pt.p)}; })
+    .sort((a,b)=>a.score-b.score).slice(0,n);
+}
+// trade one meal slot between two days (or move it when the other day is empty)
+function tradeMeals(d1,d2,slot){
+  if(d1===d2||!['breakfast','lunch','dinner'].includes(slot)) return false;
+  if(slot==='lunch' && (isLeftoverLunch(d1)||isLeftoverLunch(d2))){ toast('Weekday lunches are leftovers. Trade the dinners instead.'); return false; }
+  const a=state.plan[d1], b=state.plan[d2], ra=a[slot], rb=b[slot];
+  if(!ra && !rb) return false;
+  a[slot]=rb||null; b[slot]=ra||null;
+  const by = Sync.person ? Sync.person.label : person().label;
+  state.changes.unshift({id:'chg-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:Date.now(), kind:'trade', d:d1, d2, slot, from:ra||null, to:rb||null, by});
+  state.changes=state.changes.slice(0,40);
+  const warn=[[ra,d2],[rb,d1]].some(([id,d])=>id && slot==='dinner' && needsLeftover(d) && !rec(id).leftover);
+  commit();
+  toast(rb ? `${DAYS[d1]} ⇄ ${DAYS[d2]} ${slot}${warn?'. One dish doesn’t reheat well for tomorrow’s lunch.':''}` : `Moved to ${DAYS[d2]} ${slot}`);
+  return true;
+}
+// one tap: swap in a good alternative, with Undo
+function shuffleMeal(d,slot,pid=selPerson){
+  const opts=swapSuggestions(d,slot,pid,3); if(!opts.length) return toast('No close alternatives left this week');
+  const pick=opts[Math.floor(Math.random()*opts.length)].r;
+  const snap=JSON.stringify({plan:state.plan[d],farali:state.farali,snack:state.snack,n:state.changes.length});
+  if(!setMealView(d,slot,pick.id,pid)) return;
+  const logged=state.changes[0] && state.changes[0].to===pick.id ? state.changes[0].id : null;
+  toast(`Swapped for ${nameParts(pick).main}`,{action:'Undo',onAction:()=>{
+    const o=JSON.parse(snap); state.plan[d]=o.plan; state.farali=o.farali; state.snack=o.snack;
+    if(logged) state.changes=state.changes.filter(c=>c.id!==logged);
+    commit(); toast('Swap undone');
+  }});
+}
 // who changed what — shared with the family through the synced state, shown in Notifications
 function logChange(d,slot,from,to,pid){
   if(from===to) return;
@@ -523,10 +577,10 @@ function renderMToday(dir){
     if(m){ const r=rec(m.rid), pt=portion(m.rid,pid,s.id,mDay), locked=isLocked(mDay,s.id), st=statusOf(mDay,s.id,pid);
       const vtag=pt.v?` · ${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])}`:'';
       const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
-      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}">
+      body=`<div data-key="${key}" class="m-item ${!m.fixed&&!m.leftover&&!m.farali&&!m.weekly?'can-drag':''} ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}">
         <span class="meal-ic" style="--bk:${SLOT_COLOR[s.id]}" aria-hidden="true">${emojiOf(r)}</span>
         <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
-        <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
+        <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button><button class="m-ic" data-mshuffle="${key}" aria-label="Shuffle for a similar meal">${ICON.shuffle}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
       </div>`;
     } else {
       const canLo = s.id==='lunch' && LEFTOVER_DAYS.includes(mDay) && state.plan[mDay].lunchFresh && !isFarali(pid,mDay);
@@ -600,8 +654,20 @@ function renderPlacePicker(){
 function openSlotPicker(key){
   const {d,slot}=parseCtx(key), far=isFarali(selPerson,d)&&(slot==='lunch'||slot==='dinner');
   sheetState={t:'slot',d,slot,far,q:''};
-  openSheet(FULLDAY[d], (far?'Farali ':'')+SLOT_LABEL[slot].toLowerCase(),
-    `<div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off"></div><div id="shList"></div>`);
+  const cur=mealFor(d,slot,selPerson), r0=cur&&!cur.fixed?rec(cur.rid):null;
+  const sug=swapSuggestions(d,slot);
+  const sign=n=>n>0?`+${n}`:`${n}`;
+  const pickRow=(x,extra)=>`<button class="pick" data-pick="${x.r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[x.r.cat]}" aria-hidden="true">${emojiOf(x.r)}</span><span class="tx"><span class="nm">${esc(nameParts(x.r).main)}</span>${sidesHTML(x.r)}<span class="meta">${x.pt.kcal} kcal · ${x.pt.p}g P${extra||''}</span></span><span class="plus" aria-hidden="true">+</span></button>`;
+  const canTrade = !far && slot!=='snack' && !(slot==='lunch' && isLeftoverLunch(d));
+  const trades = canTrade ? DAYS.map((dn,dd)=>{ if(dd===d) return ''; if(slot==='lunch'&&isLeftoverLunch(dd)) return '';
+      const id=state.plan[dd][slot], r=id&&rec(id);
+      return `<button class="pick trade" data-trade="${dd}"><span class="pk-ic day" aria-hidden="true">${dn}</span><span class="tx"><span class="nm">${r?esc(nameParts(r).main):'Empty'}</span><span class="meta">${r?`${FULLDAY[dd]} · trade places`:`Move it to ${FULLDAY[dd]}`}</span></span><span class="plus" aria-hidden="true">⇄</span></button>`; }).join('') : '';
+  openSheet(`${FULLDAY[d]} · ${(far?'farali ':'')+SLOT_LABEL[slot].toLowerCase()}`, r0?'Swap this meal':'Add a meal', `
+    ${r0?`<div class="pick now"><span class="pk-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r0)}</span><span class="tx"><span class="meta">Now</span><span class="nm">${esc(nameParts(r0).main)}</span>${sidesHTML(r0)}</span>${cur.leftover?'':`<button class="m-btn sm ghost" data-shuffle-now>🔀 Shuffle</button>`}</div>`:''}
+    ${sug.length?`<div class="sh-lbl">Suggested <small>similar calories &amp; protein, not already this week</small></div>${sug.map(x=>pickRow(x, r0?` · <b>${sign(x.dk)} kcal · ${sign(x.dp)}g P</b>`:'')).join('')}`:''}
+    ${trades?`<div class="sh-lbl">Trade within the week</div>${trades}`:''}
+    <div class="sh-lbl">Browse all</div>
+    <div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off"></div><div id="shList"></div>`);
   renderSlotList();
 }
 function renderSlotList(){
@@ -739,11 +805,15 @@ $('#cal').addEventListener('click',e=>{
   if(cell) return openSlotPicker(cell.dataset.drop);
 });
 let dragRid=null;
-document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; dragRid=src.dataset.rid; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
+let dragCtx=null;
+document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; dragRid=src.dataset.rid; dragCtx=src.dataset.ctx||null; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
 document.addEventListener('dragover',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); e.dataTransfer.dropEffect='copy'; cell.classList.add('drop-hover'); });
 document.addEventListener('dragleave',e=>{ const cell=e.target.closest('[data-drop]'); if(cell) cell.classList.remove('drop-hover'); });
 document.addEventListener('drop',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); cell.classList.remove('drop-hover');
-  const rid=e.dataTransfer.getData('text/plain')||dragRid; if(!rid) return; const c=parseCtx(cell.dataset.drop); setMealView(c.d,c.slot,rid); dragRid=null; });
+  const rid=e.dataTransfer.getData('text/plain')||dragRid; if(!rid) return; const c=parseCtx(cell.dataset.drop);
+  const src=dragCtx&&parseCtx(dragCtx); dragRid=null; dragCtx=null;
+  if(src && src.slot===c.slot && src.d!==c.d && ['breakfast','lunch','dinner'].includes(c.slot) && !isFarali(selPerson,c.d) && !isFarali(selPerson,src.d)) return tradeMeals(src.d,c.d,c.slot);
+  setMealView(c.d,c.slot,rid); });
 $('#drawerX').addEventListener('click',closeDrawer);
 $('#scrim').addEventListener('click',closeDrawer);
 $('#drawerBody').addEventListener('click',e=>{
@@ -784,6 +854,7 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-addq]')) return addToPlan(b,b.dataset.addq);
   if(b=q('[data-plan]')) return openPlacePicker(b.dataset.plan);
   if(b=q('[data-mswap]')) return openSlotPicker(b.dataset.mswap);
+  if(b=q('[data-mshuffle]')){ const c=parseCtx(b.dataset.mshuffle); return shuffleMeal(c.d,c.slot); }
   if(b=q('[data-mlock]')){ const c=parseCtx(b.dataset.mlock); return toggleLock(c.d,c.slot); }
   if(b=q('[data-mremove]')){ const c=parseCtx(b.dataset.mremove); return removeMealView(c.d,c.slot); }
   if(b=q('[data-uselo]')) return useLeftovers(+b.dataset.uselo);
@@ -942,6 +1013,11 @@ function notifications(){
   const ago=t=>{ const m=Math.round((Date.now()-t)/6e4); return m<1?'Just now':m<60?`${m} min ago`:m<1440?`${Math.round(m/60)} h ago`:`${Math.round(m/1440)} d ago`; };
   const changes=(state.changes||[]).map(c=>{
     const where = c.slot==='snack' ? 'Snack box' : `${FULLDAY[c.d]} ${SLOT_LABEL[c.slot].toLowerCase()}${c.who?` (${c.who})`:''}`;
+    if(c.kind==='trade'){
+      const title = c.to ? `Traded ${SLOT_LABEL[c.slot].toLowerCase()}: ${DAYS[c.d]} ⇄ ${DAYS[c.d2]}` : `Moved ${SLOT_LABEL[c.slot].toLowerCase()}: ${DAYS[c.d]} → ${DAYS[c.d2]}`;
+      const body = c.to ? `${nm(c.from)} is now ${FULLDAY[c.d2]}, ${nm(c.to)} is now ${FULLDAY[c.d]} · by ${c.by}` : `${nm(c.from)} moved to ${FULLDAY[c.d2]} · by ${c.by}`;
+      return {id:c.id, day:99, e:'⇄', bk:'var(--c-shake)', title, body, when:ago(c.at), ctx:`${c.d2}|${c.slot}`};
+    }
     const what = c.from&&c.to ? `${nm(c.from)} → ${nm(c.to)}` : c.to ? `Added ${nm(c.to)}` : `Removed ${nm(c.from)}`;
     return {id:c.id, day:99, e:'🔄', bk:'var(--c-shake)', title:`${c.from&&c.to?'Swapped':c.to?'Added to':'Cleared'} ${where}`, body:`${what} · by ${c.by}`, when:ago(c.at), rid:c.to||c.from, ctx: c.slot==='snack'?null:`${c.d}|${c.slot}`};
   });
@@ -989,3 +1065,51 @@ document.addEventListener('click',e=>{
   }
 });
 renderBells();
+
+$('#sheet').addEventListener('click',e=>{
+  if(!sheetState||sheetState.t!=='slot') return;
+  let b;
+  if(b=e.target.closest('[data-trade]')){ const {d,slot}=sheetState; closeSheet(); return tradeMeals(d,+b.dataset.trade,slot); }
+  if(e.target.closest('[data-shuffle-now]')){ const {d,slot}=sheetState; closeSheet(); return shuffleMeal(d,slot,sheetState&&sheetState.far?FARALI.pid:selPerson); }
+});
+
+/* ---- long-press a meal on Today, drop it on a day in the strip ---- */
+let mealDrag=null, suppressClick=false;
+(()=>{
+  const root=$('#mToday'); let timer=null, sx=0, sy=0;
+  const target=(x,y)=>{ const el=document.elementFromPoint(x,y); return el&&el.closest('.ds-day'); };
+  function begin(item,x,y){
+    const r=item.getBoundingClientRect(), {d,slot}=parseCtx(item.dataset.key);
+    const ghost=item.cloneNode(true); ghost.classList.add('drag-ghost');
+    Object.assign(ghost.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px'});
+    document.body.appendChild(ghost); item.classList.add('drag-src'); document.body.classList.add('meal-dragging');
+    mealDrag={item,ghost,d,slot,ox:x,oy:y,over:null};
+    try{ navigator.vibrate&&navigator.vibrate(12); }catch(e){}
+    toast(`Drop on a day to move ${SLOT_LABEL[slot].toLowerCase()} there`);
+  }
+  function move(x,y){
+    const m=mealDrag; m.ghost.style.transform=`translate(${x-m.ox}px,${y-m.oy}px) scale(.96) rotate(-1.5deg)`;
+    const t=target(x,y); if(m.over&&m.over!==t) m.over.classList.remove('drop-target');
+    if(t && +t.dataset.day!==m.d){ t.classList.add('drop-target'); m.over=t; } else m.over=null;
+  }
+  function end(drop){
+    const m=mealDrag; mealDrag=null; if(!m) return;
+    m.ghost.remove(); m.item.classList.remove('drag-src'); document.body.classList.remove('meal-dragging');
+    if(m.over) m.over.classList.remove('drop-target');
+    suppressClick=true; setTimeout(()=>suppressClick=false,350);
+    if(drop && m.over) tradeMeals(m.d,+m.over.dataset.day,m.slot);
+  }
+  root.addEventListener('pointerdown',e=>{
+    if(e.button>0) return; const item=e.target.closest('.m-item.can-drag'); if(!item||e.target.closest('.m-acts')) return;
+    sx=e.clientX; sy=e.clientY; clearTimeout(timer); timer=setTimeout(()=>{ timer=null; begin(item,sx,sy); },430);
+  });
+  document.addEventListener('pointermove',e=>{
+    if(timer && (Math.abs(e.clientX-sx)>8||Math.abs(e.clientY-sy)>8)){ clearTimeout(timer); timer=null; }
+    if(mealDrag) move(e.clientX,e.clientY);
+  });
+  document.addEventListener('pointerup',()=>{ clearTimeout(timer); timer=null; if(mealDrag) end(true); });
+  document.addEventListener('pointercancel',()=>{ clearTimeout(timer); timer=null; if(mealDrag) end(false); });
+  root.addEventListener('touchmove',e=>{ if(mealDrag) e.preventDefault(); },{passive:false});
+  root.addEventListener('contextmenu',e=>{ if(e.target.closest('.m-item.can-drag')) e.preventDefault(); });
+  document.addEventListener('click',e=>{ if(suppressClick){ e.stopPropagation(); e.preventDefault(); suppressClick=false; } },true);
+})();
