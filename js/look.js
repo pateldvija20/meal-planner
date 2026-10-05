@@ -8,11 +8,13 @@ const Theme = {
   apply(){
     const t=this.get(), root=document.documentElement;
     if(t==='system') delete root.dataset.theme; else root.dataset.theme=t;
-    const m=document.querySelector('meta[name="theme-color"]'); if(m) m.content = this.effective()==='dark' ? '#0C0C0D' : '#EDEDEC';
+    // one theme-color per scheme (matches the page's top colour); a forced theme overrides both so the status bar can't disagree
+    const C={light:'#EDEDEC',dark:'#0C0C0D'};
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m=>{ m.content = C[t==='system' ? m.dataset.scheme : t]; });
   },
   toggle(){ this.set(this.effective()==='dark'?'light':'dark'); },
 };
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{ Theme.apply(); if(typeof renderEverything==='function') renderEverything(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>Motion.transition(()=>{ Theme.apply(); if(typeof renderEverything==='function') renderEverything(); }));
 
 /* ---------- colour per meal slot / recipe category ---------- */
 const SLOT_COLOR = {drink:'var(--c-drink)', breakfast:'var(--c-breakfast)', shake:'var(--c-shake)', lunch:'var(--c-lunch)', snack:'var(--c-snack)', dinner:'var(--c-dinner)'};
