@@ -132,7 +132,7 @@ function chipHtml(m,d,slot,pid){
   const tag = st?`<div class="lo st">${esc(statusLabel(st))}</div>` : m.weekly?`<div class="lo">weekly snack · made Sunday</div>` : m.leftover?`<div class="lo">↩ ${m.from} dinner${pt.v==='chicken'?' · chicken':''}</div>` : m.farali?`<div class="lo">farali · ${pp.label}</div>` : pt.v?`<div class="lo">${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])} · ${pp.label}</div>`:'';
   const acts = m.fixed ? '' : `<div class="chip-act">${(!m.leftover&&!m.farali&&!(m.weekly&&d>0))?`<button class="lk ${locked?'on':''}" data-lock="${key}" title="${locked?'Unlock':'Lock so Generate keeps it'}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}<button class="x" data-remove="${key}" title="${m.leftover?'Cook a fresh lunch instead':'Remove'}" aria-label="Remove">×</button></div>`;
   return `<div class="chip ${m.fixed?'fixed':''} ${m.leftover?'leftover':''} ${m.farali?'farali':''} ${m.weekly?'weekly':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" ${m.fixed?'':'draggable="true"'} data-rid="${m.rid}" data-open="${m.rid}" data-ctx="${key}" style="--cat:${CATS[r.cat]};--sel:${pp.hex}">
-    ${tag}<div class="nm">${esc(shortName(r))}</div>
+    <span class="chip-ic" style="--bk:${SLOT_COLOR[slot]}" aria-hidden="true">${emojiOf(r)}</span>${tag}<div class="nm">${esc(shortName(r))}</div>
     <div class="mac"><b>${pt.kcal}</b> kcal · <b style="color:var(--pro)">${pt.p}g</b> P${pt.s!==1&&!m.fixed?` · ${niceCount(pt.s)}×`:''}</div>${acts}</div>`;
 }
 function renderCal(){
@@ -195,26 +195,38 @@ function renderFilters(){
   const cu=cuisineList().map(c=>`<button data-cu="${esc(c)}" class="${c===cuisine?'active':''}">${c==='all'?'all cuisines':esc(c)}</button>`).join('');
   $('#cuisines').innerHTML=cu; $('#mCuisines').innerHTML=cu;
 }
+// recipe of the week: a PCOD-friendly main, the same for the whole family all week
+function recipeOfWeek(){
+  const pool=libRecipes().filter(r=>r.cat==='main'&&!r.farali&&isPcodFriendly(r)); if(!pool.length) return null;
+  let h=0; for(const c of state.weekStart) h=(h*31+c.charCodeAt(0))>>>0; return pool[h%pool.length];
+}
+function tileHTML(r,kind){
+  const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
+  const stamp = kind==='feature' ? '<span class="stamp gold">Recipe of the week!</span>'
+    : r.id===state.snack.rid ? '<span class="stamp gold">This week’s box</span>'
+    : r.protein ? '<span class="stamp">Chicken night</span>' : '';
+  const cls = kind==='feature' ? 'feature' : kind==='wide' ? 'wide colored' : '';
+  return `<article class="tile ${cls}" style="--bk:${CAT_COLOR[r.cat]||'var(--surface-2)'}" data-rid="${r.id}" draggable="true">${stamp}
+    <button class="m-hit" data-open="${r.id}"><span class="tile-emoji" aria-hidden="true">${emojiOf(r)}</span>
+      <span class="tile-name">${esc(r.name)}</span>
+      ${kind?`<span class="tile-sub">${esc(r.upgrade)}</span>`:''}
+      <span class="tile-meta"><b>${pt.kcal}</b> kcal · <b>${pt.p}g</b> protein</span>
+      <span class="tile-sub">${esc(r.farali?'Farali':r.cuisine||CAT_LABEL[r.cat])}</span>
+    </button>
+    <button class="tile-add ${inQ?'added':''}" data-addq="${r.id}" aria-label="${inQ?'Remove '+esc(r.name)+' from the plan queue':'Add '+esc(r.name)+' to the plan'}">${inQ?'✓':'+'}</button></article>`;
+}
+function bentoHTML(list){
+  const feat = filter==='all' && !query && cuisine==='all' ? recipeOfWeek() : null;
+  const out=[]; let n=0;
+  if(feat) out.push(tileHTML(feat,'feature'));
+  list.forEach(r=>{ if(feat&&r.id===feat.id) return; out.push(tileHTML(r, n%7===4?'wide':'')); n++; });
+  return out.join('');
+}
 function renderLib(){
   const all=libRecipes(), list=all.filter(matches);
   $('#libcount').textContent=list.length+' of '+all.length+' recipes';
-  if(!list.length){ $('#lib').innerHTML=`<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`; return; }
-  $('#lib').innerHTML=list.map(r=>{
-    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
-    const cols=PEOPLE.map(p=>{ const q=portion(r.id,p.id,slot,null); return `<div class="pcol ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="who"><i></i>${p.label}<small>${niceCount(q.s)}×</small></div><div class="serve">${esc(serveText(r,q.s,q.v))}</div><div class="nums"><span class="kc">${q.kcal}</span><span class="pr">${q.p}g P</span></div></div>`; }).join('');
-    return `<article class="rc" draggable="true" data-rid="${r.id}" style="--cat:${CATS[r.cat]}">
-      <div class="top"><div class="name">${esc(r.name)}</div><div class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}${r.custom?' · custom':''}</div></div>
-      <div class="rc-meta">${esc(r.cuisine||'')}</div><div class="badges">${recipeBadges(r)}</div>
-      <div class="upgrade"><span class="lift">Upgrade</span><span>${esc(r.upgrade)}</span></div>
-      <div class="macro-wrap"><div class="macro-label"><span>Macros — <b>${person().label}</b> portion</span><span><b>${pt.kcal}</b> kcal</span></div>${macroBar(pt)}
-        <div class="macro-key"><span><i style="background:var(--pro)"></i>P ${pt.p}g</span><span><i style="background:var(--carb)"></i>C ${pt.c}g</span><span><i style="background:var(--fat)"></i>F ${pt.f}g</span></div></div>
-      <div class="portions"><div class="ph">Portions · ${slot}</div><div class="ptable">${cols}</div></div>
-      <button class="addq ${inQ?'added':''}" data-addq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button>
-    </article>`;
-  }).join('');
+  $('#lib').innerHTML = list.length ? bentoHTML(list) : `<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`;
 }
-
-/* ================= recipe drawer ================= */
 function ingLine(it){
   const qt = it.u==='' ? niceCount(Math.ceil(it.q*2)/2) : fmtQty(roundQty(it.q,it.u),it.u);
   const who = it.who && it.who.size ? `<small class="ing-who">for ${[...it.who].map(id=>personById(id).label).join(', ')}</small>` : '';
@@ -271,6 +283,7 @@ function openDrawer(rid,ctxKey,keep){
   const li=arr=>(arr&&arr.length?arr:['—']).map(x=>`<li>${esc(x)}</li>`).join('');
   $('#drawerBody').innerHTML=`
     ${ctx?`<div class="d-ctx">${FULLDAY[ctx.d]} · ${SLOT_LABEL[ctx.slot]}${m&&m.leftover?` · leftovers from ${m.from} dinner`:''}${m&&m.farali?` · farali for ${person().label}`:''}</div>`:''}
+    <div class="d-hero-emoji" style="--bk:${ctx?SLOT_COLOR[ctx.slot]:(CAT_COLOR[r.cat]||'var(--surface)')}" aria-hidden="true">${emojiOf(r)}</div>
     <h2 class="d-name">${esc(r.name)}</h2>
     <div class="d-tagrow"><span class="tag" style="background:${CATS[r.cat]}">${r.farali?'farali':CAT_LABEL[r.cat]}</span>${r.cuisine?`<span class="tag ghost">${esc(r.cuisine)}</span>`:''}${r.custom?'<span class="tag ghost">custom</span>':''}</div>
     <div class="badges">${recipeBadges(r)}</div>
@@ -371,24 +384,24 @@ function groceryHTML(scope){
     let extra='';
     if(open){
       const cells=it.key&&FOODS[it.key]?cellsForIngredient(it.key):[];
-      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' · '+SLOT_LABEL[c.slot]}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink / shake'):'From a custom recipe'}</div>
+      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' '+SLOT_LABEL[c.slot].toLowerCase()}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink and shake'):'From a custom recipe'}</div>
         <div class="gc-move"><span>Buy at</span>${state.stores.map(st=>`<button data-setstore="${esc(it.id)}|${st.id}" class="${it.storeId===st.id?'on':''}">${esc(st.name)}</button>`).join('')}</div>`;
     }
-    return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}"><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><b class="gc-q">${it.qty||'as listed'}</b></button>${extra}</div>`;
+    return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><span class="gc-ic" aria-hidden="true">${FOOD_EMOJI[it.key]||AISLE_EMOJI[it.cat]||'🛒'}</span><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><span class="gc-q">${it.qty||'as listed'}</span></button><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}">${extra}</div>`;
   };
-  const byAisle=list=>AISLES.map(a=>{ const g=list.filter(it=>(it.cat||'Other')===a); return g.length?`<div class="gc-group">${a}</div>`+g.map(row).join(''):''; }).join('');
+  const byAisle=list=>AISLES.map(a=>{ const g=list.filter(it=>(it.cat||'Other')===a); return g.length?`<div class="gc-group">${AISLE_EMOJI[a]} ${a}</div>`+g.map(row).join(''):''; }).join('');
   const shown = gStore==='all' ? sections : sections.filter(x=>x.id===gStore);
   const visible = shown.flatMap(x=>x.items), done=visible.filter(it=>it.done).length;
   const tabs=[{id:'all',name:'All',items}].concat(sections).map(x=>{ const d=x.items.filter(it=>it.done).length;
     return `<button data-gstore="${x.id}" class="${gStore===x.id?'active':''}" aria-pressed="${gStore===x.id}">${esc(x.name)} <small>${d?d+'/':''}${x.items.length}</small></button>`; }).join('');
   const body = !items.length ? '<p class="form-note">Nothing planned yet.</p>'
-    : gStore==='all' ? shown.filter(x=>x.items.length).map(x=>`<div class="gc-store"><div class="gc-store-h"><b>${esc(x.name)}</b><span>${x.items.filter(i=>i.done).length}/${x.items.length}</span></div>${x.items.map(row).join('')}</div>`).join('')
+    : gStore==='all' ? shown.filter(x=>x.items.length).map(x=>`<div class="gc-store"><div class="gc-store-h"><b>${esc(x.name)}</b><span>${x.items.filter(i=>i.done).length} of ${x.items.length}</span></div>${x.items.map(row).join('')}</div>`).join('')
     : (visible.length ? byAisle(visible) : `<p class="form-note">Nothing to buy at ${esc((shown[0]||{}).name||'this store')} this week.</p>`);
   const label = gStore==='all' ? '' : ' '+((shown[0]||{}).name||'');
-  return `<p class="${scope==='m'?'m-sub':'form-note'}">Everything for this week’s ${sessions} cooking sessions (dinners include tomorrow’s lunch, plus the Sunday snack box) and 7 days of drinks and shakes. Tap an item to see where it’s used or move it to another store. Salt, spices and herbs assumed on hand.</p>
+  return `${items.length?`<div class="g-hero"><span class="num">${done}<small>of ${visible.length} in the basket</small></span>${segBar(visible.length?done/visible.length:0,'var(--ink)',12)}</div>`:''}
+    <p class="${scope==='m'?'m-sub':'form-note'}">This week’s ${sessions} cooking sessions plus 7 days of drinks and shakes. Tap an item to see where it’s used or move it to another store.</p>
     ${items.length?`<div class="filters g-tabs">${tabs}</div>
-    <div class="m-prog"><div class="bar" style="--sel:var(--olive)"><span style="width:${visible.length?Math.round(done/visible.length*100):0}%"></span></div></div>
-    <div class="gc-actions"><button class="btn-ghost" data-gcopy>Copy${esc(label)} list</button><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gmanage>Stores…</button><span class="hint">${done}/${visible.length} ticked</span></div>`:''}
+    <div class="gc-actions"><button class="btn-ghost" data-gcopy>Copy${esc(label)} list</button><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gmanage>Stores…</button></div>`:''}
     <div class="gc-list">${body}</div>`;
 }
 function openGrocery(keep){
@@ -456,15 +469,12 @@ function jumpTo(key){
 const isMobile=()=>window.matchMedia('(max-width:760px)').matches;
 
 /* ================= mobile ================= */
-const TABS=[['discover','Discover'],['today','Today'],['grocery','Grocery'],['queue','Queue']];
+const TABS=[['today','Today'],['discover','Discover'],['grocery','Grocery'],['queue','Queue']];
 function renderMobile(){
   const pp=person();
-  $('#mProfile').innerHTML=`<span style="--pc:${pp.hex}">${pp.label[0]}</span>${ICON.chart}<i class="sync-dot s-${Sync.status}"></i>`;
-  $('#mKicker').textContent = Sync.user ? `${SYNC_LABEL[Sync.status]} · ${Sync.person?Sync.person.label:''}` : 'Family of three · not synced';
-  $('#mPeople').innerHTML=PEOPLE.map(p=>`<button data-mp="${p.id}" class="${p.id===selPerson?'active':''}" aria-pressed="${p.id===selPerson}"><span class="dot" style="background:${p.hex}"></span>${p.label}</button>`).join('');
+  $('#mProfile').innerHTML=`<span style="--pc:${pp.hex}">${pp.label[0]}</span><i class="sync-dot s-${Sync.status}"></i>`;
   $('#mTabs').innerHTML=TABS.map(([id,l])=>`<button class="m-tab ${id===mTab?'active':''}" data-tab="${id}" ${id===mTab?'aria-current="page"':''}>${ICON[id]}${l}${id==='queue'&&state.queue.length?`<span class="m-badge">${state.queue.length}</span>`:''}</button>`).join('');
   Motion.slide('tabs',$('#mTabs'),'tab-ind',TABS.findIndex(x=>x[0]===mTab));
-  Motion.slide('people',$('#mPeople'),'seg-ind',PEOPLE.findIndex(p=>p.id===selPerson));
   document.querySelectorAll('.m-panel').forEach(p=>p.hidden=p.dataset.panel!==mTab);
   ({discover:renderMDiscover,today:renderMToday,grocery:renderMGrocery,queue:renderMQueue})[mTab]();
 }
@@ -476,34 +486,33 @@ function setTab(t){
 function renderMDiscover(){
   $('#mFilters').innerHTML=LIB_FILTERS.map(([c,l])=>`<button data-mf="${c}" class="${c===filter?'active':''}">${l}</button>`).join('');
   if($('#mSearch').value!==query) $('#mSearch').value=query;
-  const all=libRecipes(), list=all.filter(matches), pp=person();
+  const all=libRecipes(), list=all.filter(matches);
   $('#mLibCount').textContent=list.length+' of '+all.length;
-  if(!list.length){ $('#mLib').innerHTML=`<div class="m-empty">No recipes match “${esc(query)}”.</div>`; return; }
-  $('#mLib').innerHTML=list.map(r=>{
-    const slot=defSlot(r), pt=portion(r.id,selPerson,slot,null), inQ=state.queue.includes(r.id);
-    return `<article class="m-card" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${r.id}">
-        <span class="top"><span class="name">${esc(r.name)}</span><span class="tag">${r.farali?'farali':CAT_LABEL[r.cat]}</span></span>
-        <span class="m-upg">${esc(r.cuisine?r.cuisine+' · ':'')}${esc(r.upgrade)}</span>
-        <span class="m-mac"><span><b>${pt.kcal}</b> kcal · ${pp.label} ${niceCount(pt.s)}×</span><span><b style="color:var(--pro)">P ${pt.p}g</b> · C ${pt.c} · F ${pt.f}</span></span>${macroBar(pt)}<span class="badges">${recipeBadges(r)}</span></button>
-      <div class="m-card-actions"><button class="m-btn ${inQ?'ghost added':''}" data-mq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button></div></article>`;
-  }).join('');
+  $('#mLib').innerHTML = list.length ? bentoHTML(list) : `<div class="m-empty">No recipes match “${esc(query)}”.</div>`;
+}
+// the day as dial segments: one arc per meal, sized by what that person eats
+function dayParts(d,pid){
+  return SLOTS.map(s=>{ const m=mealFor(d,s.id,pid); if(!m) return null; const st=statusOf(d,s.id,pid);
+    const kcal = st==='skip' ? 0 : st ? outEstimate(d,s.id,pid,st) : portion(m.rid,pid,s.id,d).kcal;
+    return {slot:s.id,kcal,color:SLOT_COLOR[s.id],emoji:emojiOf(rec(m.rid))}; }).filter(Boolean);
 }
 let lastSumKcal=null, lastSumKey=null;
 function renderMToday(dir){
   const pid=selPerson, pp=person(), t=dayTotals(mDay,pid), g=macroGuide(pid);
-  const eTot=(t.p*4+t.c*4+t.f*9)||1, share={p:t.p*4/eTot,c:t.c*4/eTot,f:t.f*9/eTot};
-  const pct=Math.round(t.kcal/pp.target*100), over=pp.note==='losing'&&t.kcal>pp.target*1.05;
-  const days=DAYS.map((dn,d)=>{ const w=Math.min(100,Math.round(dayTotals(d,pid).kcal/pp.target*100));
-    return `<button class="m-day ${d===mDay?'active':''} ${d===TODAY_IDX?'is-today':''}" data-day="${d}" aria-pressed="${d===mDay}" aria-label="${FULLDAY[d]}${d===TODAY_IDX?' (today)':''}">${dn}<span class="pip"><i style="width:${w}%"></i></span></button>`; }).join('');
-  const stat=(lbl,v,tg,col)=>`<div class="m-stat"><div class="k">${lbl}</div><div class="v">${v}<small>/${tg}g</small></div><div class="bar" style="--sel:${col}"><span style="width:${Math.min(100,Math.round(v/tg*100))}%"></span></div></div>`;
+  const pct=Math.round(t.kcal/pp.target*100), over=t.kcal>pp.target*1.05;
+  const strip=DAYS.map((dn,d)=>{
+    const dots=['breakfast','lunch','dinner'].map(s=>`<i style="${mealFor(d,s,pid)?`background:${SLOT_COLOR[s]}`:''}"></i>`).join('');
+    return `<button class="ds-day ${d===mDay?'active':''} ${d===TODAY_IDX?'is-today':''}" data-day="${d}" aria-pressed="${d===mDay}" aria-label="${FULLDAY[d]} ${dayDate(d)}${d===TODAY_IDX?' (today)':''}"><span class="ds-name">${dn}</span><span class="ds-num">${dayDate(d).split(' ')[1]}</span><span class="ds-dots">${dots}</span></button>`; }).join('');
+  const hm=(lbl,v,tg,col)=>`<div class="hm"><span class="k">${lbl}</span><b>${v}<small> / ${tg}g</small></b>${segBar(v/tg,col,10)}</div>`;
   const rows=SLOTS.map(s=>{
     const m=mealFor(mDay,s.id,pid), key=mDay+'|'+s.id;
-    let body;
     if(!m && s.id==='snack') return '';
+    let body;
     if(m){ const r=rec(m.rid), pt=portion(m.rid,pid,s.id,mDay), locked=isLocked(mDay,s.id), st=statusOf(mDay,s.id,pid);
       const vtag=pt.v?` · ${pt.v==='chicken'?'chicken':esc(r.protein.veg[3])}`:'';
-      const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo fixed">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo fixed">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
-      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}" style="--cat:${CATS[r.cat]}">
+      const badge=st?`<span class="m-badge-lo st">${esc(statusLabel(st))}${st!=='skip'?` · ~${outEstimate(mDay,s.id,pid,st)} kcal`:''}</span>`:m.weekly?`<span class="m-badge-lo">weekly snack · made Sunday</span>`:m.leftover?`<span class="m-badge-lo">↩ ${m.from} dinner leftovers${vtag}</span>`:m.farali?`<span class="m-badge-lo">farali</span>`:m.fixed?`<span class="m-badge-lo">every day</span>`:vtag?`<span class="m-badge-lo">${vtag.slice(3)}</span>`:'';
+      body=`<div class="m-item ${m.fixed?'fixed':''} ${locked?'locked':''} ${st?(st==='skip'?'st-skip':'st-out'):''}">
+        <span class="meal-ic" style="--bk:${SLOT_COLOR[s.id]}" aria-hidden="true">${emojiOf(r)}</span>
         <button class="m-hit" data-open="${m.rid}" data-ctx="${key}">${badge}<span class="nm">${esc(r.name)}</span><span class="meta"><b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b> · ${esc(serveText(r,pt.s,pt.v))}</span></button>
         <div class="m-acts"><button class="m-ic ${st?'on':''}" data-mstatus="${key}" aria-label="Mark eaten, skipped or ate out">${ICON.check}</button>${m.fixed?'':`<button class="m-ic" data-mswap="${key}" aria-label="Swap">${ICON.swap}</button>${!m.leftover&&!m.farali&&!m.weekly?`<button class="m-ic ${locked?'on':''}" data-mlock="${key}" aria-label="${locked?'Unlock':'Lock'}">${locked?ICON.lock:ICON.unlock}</button>`:''}`}</div>
       </div>`;
@@ -513,46 +522,42 @@ function renderMToday(dir){
     }
     const st0=m&&statusOf(mDay,s.id,pid);
     const kc=!m?0: st0==='skip'?0 : st0?outEstimate(mDay,s.id,pid,st0) : portion(m.rid,pid,s.id,mDay).kcal;
-    return `<div class="m-meal"><div class="m-meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
+    return `<div class="meal-sec"><div class="meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
   }).join('');
-  const dinnerBatch=batchFor(mDay,'dinner');
-  const cookNote = dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? `<p class="m-cook">Tonight, cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))}. That covers ${FULLDAY[nextDay(mDay)]}’s lunch too.</p>` : '';
-  const snackR=rec(state.snack.rid);
-  const snackNote = mDay===0 && snackR ? `<p class="m-cook">Snack box this week: ${esc(snackR.name)}. Prep ${snackBatch()?snackBatch().servings:0} servings on Sunday; it keeps ${esc(snackR.keeps||'a week')}.</p>` : '';
-  const faraliNote = mDay===FARALI.day && pid!==FARALI.pid ? `<p class="m-cook">Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'—')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'—')} for dinner.</p>`:'';
+  const note=(e,bk,txt)=>`<p class="note" style="--bk:${bk}"><span class="e" aria-hidden="true">${e}</span><span>${txt}</span></p>`;
+  const dinnerBatch=batchFor(mDay,'dinner'), snackR=rec(state.snack.rid);
+  const notes=(dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? note('🍳','var(--c-snack)',`Tonight, cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))}. That covers ${FULLDAY[nextDay(mDay)]}’s lunch too.`) : '')
+    + (mDay===0 && snackR ? note(emojiOf(snackR),'var(--c-breakfast)',`Snack box this week: ${esc(snackR.name)}. Prep ${snackBatch()?snackBatch().servings:0} servings on Sunday; it keeps ${esc(snackR.keeps||'a week')}.`) : '')
+    + (mDay===FARALI.day && pid!==FARALI.pid ? note('🌾','var(--c-lunch)',`Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'nothing yet')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'nothing yet')} for dinner.`) : '');
+  const sub=`${mDay===TODAY_IDX?'Today · ':''}${dayDate(mDay)}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}`;
   $('#mToday').innerHTML=`
-    <div class="m-days" style="--sel:${pp.hex}">${days}</div>
+    <div class="daystrip">${strip}</div>
     <div class="m-daybody ${dir?'m-anim':''}" style="--dx:${(dir||0)*28}px">
-      <div class="m-dayhead"><div><div class="d-ctx">${mDay===TODAY_IDX?'Today':dayDate(mDay)}${mDay===TODAY_IDX?' · '+dayDate(mDay):''}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}</div><h2 class="m-h2">${FULLDAY[mDay]}</h2></div>
-        <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
-      <div class="m-sum">
-        <div class="plate" role="img" aria-label="Energy split: protein ${Math.round(share.p*100)}%, carbs ${Math.round(share.c*100)}%, fat ${Math.round(share.f*100)}%" style="--p:${share.p.toFixed(3)};--c:${share.c.toFixed(3)};--f:${share.f.toFixed(3)}"><div class="plate-fallback"></div></div>
-        <div class="m-sum-main">
-          <div class="m-sum-top"><div><span class="big ${over?'over':''}" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal for ${pp.label}</span></div><span class="pct ${over?'over':''}">${pct}%</span></div>
-          <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${Math.min(100,pct)}%"></span></div>
-          <div class="m-stats">${stat('Protein',t.p,g.p,'var(--pro)')}${stat('Carbs',t.c,g.c,'var(--carb)')}${stat('Fat',t.f,g.f,'var(--fat)')}</div>
-        </div>
-      </div>
-      ${cookNote}${snackNote}${faraliNote}${rows}
+      <section class="hero" aria-label="${FULLDAY[mDay]}: ${t.kcal} of ${pp.target} kcal">
+        <div class="blobs" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="hero-top"><div><h2 class="hero-day">${FULLDAY[mDay]}</h2><p class="hero-sub">${sub}</p></div>
+          <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
+        <div class="dial-wrap">${dialSVG(dayParts(mDay,pid),pp.target)}
+          <div class="dial-center"><span class="num" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal</span><span class="pct ${over?'over':''}">${pct}%</span></div></div>
+        <div class="hero-macros">${hm('Protein',t.p,g.p,'var(--pro)')}${hm('Carbs',t.c,g.c,'var(--carb)')}${hm('Fat',t.f,g.f,'var(--fat)')}</div>
+      </section>
+      ${notes}${rows}
     </div>
-    <div class="m-foot"><button class="btn-solid" data-gen>${ICON.spark} Generate</button><button class="btn-ghost" id="mReset">↺ Starter plan</button></div>`;
-  Motion.slide('days',$('#mToday .m-days'),'day-ind',mDay);
+    <div class="m-foot"><button class="btn-solid" data-gen>✦ Generate</button><button class="btn-ghost" id="mReset">Starter plan</button></div>`;
+  Motion.slide('days',$('#mToday .daystrip'),'day-ind',mDay);
   const key=pid+'|'+mDay;
-  if(key!==lastSumKey) Motion.countUp($('#mToday [data-kcal]'),t.kcal,lastSumKcal);
+  if(key!==lastSumKey){ Motion.countUp($('#mToday [data-kcal]'),t.kcal,lastSumKcal); Motion.drawDial($('#mToday .dial')); }
   lastSumKcal=t.kcal; lastSumKey=key;
-  window.Plate.attach($('#mToday .plate'),{p:t.p,c:t.c,f:t.f,key,dir:dir||1});
 }
-function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery list</h2></div>${groceryHTML('m')}`; }
+function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery</h2></div>${groceryHTML('m')}`; }
 function renderMQueue(){
   const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
-    return `<div class="m-item" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'farali':CAT_LABEL[r.cat]} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
+    return `<div class="m-item" style="margin-bottom:8px"><span class="meal-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'Farali':CAT_LABEL[r.cat].replace(/^./,c=>c.toUpperCase())} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm ghost" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
-    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week: 1–2 chicken nights, reheatable Sun–Thu dinners, and no recipe more than twice.</p>
-    <button class="btn-solid wide gen-big" data-gen>${ICON.spark} Generate plan</button>
-    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Your queue is empty. Browse recipes and tap <b>+ Queue</b> to stage them here.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
+    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week.</p>
+    <button class="btn-solid wide gen-big" data-gen>✦ Generate plan</button>
+    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Nothing queued. Tap <b>+</b> on any recipe in Discover.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
 }
-
-/* ================= bottom sheet pickers ================= */
 function openSheet(ctx,title,html){
   const s=$('#sheet'), wasOpen=s.classList.contains('open');
   $('#sheetCtx').textContent=ctx; $('#sheetTitle').textContent=title; $('#sheetBody').innerHTML=html;
@@ -592,7 +597,7 @@ function renderSlotList(){
   const s=sheetState, cat=s.slot==='breakfast'?'breakfast':s.slot==='snack'?'snack':'main', q=s.q.toLowerCase();
   const fits=r=>!r.fixed && (s.far ? r.farali : r.cat===cat) && (!q||(r.name+' '+r.tags.join(' ')+' '+r.cuisine).toLowerCase().includes(q));
   const pslot=s.slot;
-  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}" style="--cat:${CATS[r.cat]}"><span class="tx"><span class="nm">${esc(r.name)}</span><span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
+  const row=r=>{ const pt=portion(r.id,selPerson,pslot,s.d); return `<button class="pick" data-pick="${r.id}"><span class="pk-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><span class="tx"><span class="nm">${esc(r.name)}</span><span class="meta">${esc(r.cuisine||CAT_LABEL[r.cat])}${r.protein?' · chicken/'+esc(r.protein.veg[3]):''}${r.leftover&&s.slot==='dinner'?' · reheats well':''}${isPcodFriendly(r)?' · PCOD':''} · ${pt.kcal} kcal · ${pt.p}g P</span></span><span class="plus" aria-hidden="true">+</span></button>`; };
   const qd=state.queue.map(id=>rec(id)).filter(r=>r&&fits(r));
   const rest=RECIPES.filter(r=>fits(r)&&!state.queue.includes(r.id));
   const sec=(t,arr)=>arr.length?`<div class="sh-lbl">${t}</div>${arr.map(row).join('')}`:'';
@@ -629,6 +634,13 @@ function openProfile(keep){
     ${acct}
     ${personal?`<div class="pview-row">Personal view — only ${pp.label}’s portions. <button class="btn-ghost" data-familyview>Family view</button></div>`:''}
     <div class="pf-people" ${personal?'hidden':''}>${PEOPLE.map(p=>`<button class="pf-person ${p.id===pid?'active':''}" style="--pc:${p.hex}" data-pfp="${p.id}" aria-pressed="${p.id===pid}"><b>${p.label}</b><small>${p.note} · ${p.target.toLocaleString()}</small></button>`).join('')}</div>
+    <section class="pf-hero" aria-label="This week's average">
+      <div class="blobs" aria-hidden="true"><i></i><i></i></div>
+      <span class="k">${pp.label} · daily average this week</span>
+      <span class="num">${A.kcal.toLocaleString()}<small>kcal of ${pp.target.toLocaleString()}</small></span>
+      <span class="s">${A.p}g protein a day · goal ${g.p}g</span>
+      ${sparkline(days.map(t=>t.kcal),{color:'var(--c-snack)'})}
+    </section>
     <div class="seg pf-tabs" role="tablist"><button role="tab" data-ptab="tracker" class="${profTab==='tracker'?'active':''}" aria-selected="${profTab==='tracker'}">Tracker</button><button role="tab" data-ptab="week" class="${profTab==='week'?'active':''}" aria-selected="${profTab==='week'}">This week’s plan</button></div>
     ${profTab==='tracker' ? trackerHTML(pid) : `
     <div class="d-sec"><h3>Targets <small>${esc(pp.goal)}</small></h3><div class="pf-kpis four">
@@ -655,6 +667,8 @@ function openProfile(keep){
       <div class="sh-lbl">Most repeated</div><ul class="pf-list">${top.map(([rid,n])=>`<li><span>${esc(rec(rid).name)}</span><span>×${n}</span></li>`).join('')||'<li><span>Nothing planned yet</span><span></span></li>'}</ul>
       <div class="sh-lbl">Open meals</div><p class="pf-note" style="margin:0">${empty.length?esc(empty.join(' · ')):'Every meal has something planned.'}</p></div>`}
     <div class="d-sec"><h3>Settings</h3>
+      <div class="pf-set"><span>Profile<small class="pf-sub">${Sync.person?`Signed in as ${esc(Sync.person.label)}`:'Whose plan this phone shows'}</small></span><div class="seg">${PEOPLE.map(p=>`<button data-pfp="${p.id}" class="${p.id===pid?'active':''}" aria-pressed="${p.id===pid}"><span class="dot" style="background:${p.hex}"></span>${p.label}</button>`).join('')}</div></div>
+      <div class="pf-set"><span>Appearance</span><div class="seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([v,l])=>`<button data-theme-set="${v}" class="${Theme.get()===v?'active':''}">${l}</button>`).join('')}</div></div>
       <div class="pf-set links"><span>Personal links<small class="pf-sub">Opens straight into one person’s view</small></span><div class="link-list">${PEOPLE.map(p=>`<button class="btn-ghost" data-copylink="${p.id}">${p.label}’s link</button>`).join('')}</div></div>
       <div class="pf-set"><span>Grocery stores<small class="pf-sub">${state.stores.map(x=>esc(x.name)).join(' · ')}</small></span><button class="btn-ghost" data-gmanage>Manage</button></div>
       <div class="pf-set"><span>Weekly snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>
@@ -664,12 +678,22 @@ function openProfile(keep){
 }
 
 /* ================= render all ================= */
+const SUN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>';
+const MOON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>';
+function renderThemeBtns(){
+  const dark=Theme.effective()==='dark';
+  document.querySelectorAll('[data-theme-toggle]').forEach(b=>{ b.innerHTML=dark?SUN:MOON; b.setAttribute('aria-label',dark?'Switch to light mode':'Switch to dark mode'); });
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('[data-theme-toggle]')){ Motion.transition(()=>{ Theme.toggle(); renderEverything(); }); return; }
+  const t=e.target.closest('[data-theme-set]'); if(t){ Motion.transition(()=>{ Theme.set(t.dataset.themeSet); renderEverything(); }); }
+});
 function renderPview(){
   const html = personal ? `<span><b>${esc(personById(personal).label)}’s view</b> · only ${esc(personById(personal).label)}’s portions</span><button class="btn-ghost" data-familyview>Family view</button>` : '';
   $('#pviewD').innerHTML=html; $('#pviewM').innerHTML=html;
 }
 function renderEverything(){
-  renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
+  renderThemeBtns(); renderPview(); renderSeg(); renderUnits(); renderSync(); renderCal(); renderQueue(); renderLib(); renderMobile();
   if(drawerView && drawerView.t!=='form') refreshDrawer();
   if(sheetState){ if(sheetState.t==='place') renderPlacePicker(); else renderSlotList(); }
 }
@@ -685,7 +709,7 @@ $('#syncBox').addEventListener('click',e=>{ if(e.target.closest('[data-signin]')
 $('#dashBtn').addEventListener('click',()=>openProfile());
 $('#lib').addEventListener('click',e=>{
   const a=e.target.closest('[data-addq]'); if(a) return addToPlan(a,a.dataset.addq);
-  const card=e.target.closest('.rc[data-rid]'); if(card) openDrawer(card.dataset.rid,null);
+  const op=e.target.closest('[data-open]'); if(op) openDrawer(op.dataset.open,null);
 });
 $('#qstrip').addEventListener('click',e=>{
   const rm=e.target.closest('[data-deq]'); if(rm){ state.queue.splice(+rm.dataset.deq,1); armed=null; return commit(); }
@@ -747,6 +771,7 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); renderEverything(); return Motion.enter(document.querySelectorAll('#mLib .m-card'),{max:6}); }
   if(b=q('[data-cu]')){ cuisine=b.dataset.cu; renderFilters(); return renderEverything(); }
   if(b=q('[data-mq]')) return addToPlan(b,b.dataset.mq);
+  if(b=q('[data-addq]')) return addToPlan(b,b.dataset.addq);
   if(b=q('[data-plan]')) return openPlacePicker(b.dataset.plan);
   if(b=q('[data-mswap]')) return openSlotPicker(b.dataset.mswap);
   if(b=q('[data-mlock]')){ const c=parseCtx(b.dataset.mlock); return toggleLock(c.d,c.slot); }

@@ -147,8 +147,8 @@ function trackerHTML(pid){
       <div class="t-card">
         <div class="t-daynav"><button class="m-ic" data-tday="${prevDate}" aria-label="Previous day">‹</button><b>${trkDate===today?'Today · ':''}${shortDate(trkDate)}</b><button class="m-ic" data-tday="${nextDate}" ${nextDate>today?'disabled':''} aria-label="Next day">›</button></div>
         <div class="t-row"><span>Workout</span><div class="seg"><button data-tset="workout|1" class="${day.workout===true?'active':''}" ${dis}>Done</button><button data-tset="workout|0" class="${day.workout===false?'active':''}" ${dis}>Rest day</button></div></div>
-        <div class="t-row"><span>Mood</span>${scaleBtns('mood',day.mood,['Low','Meh','Okay','Good','Great'])}</div>
-        <div class="t-row"><span>Energy</span>${scaleBtns('energy',day.energy,['Drained','Low','Steady','Good','Buzzing'])}</div>
+        <div class="t-row"><span>Mood</span>${tickRuler('mood',day.mood,{labels:['Low','Meh','Okay','Good','Great'],disabled:!ed})}</div>
+        <div class="t-row"><span>Energy</span>${tickRuler('energy',day.energy,{labels:['Drained','Low','Steady','Good','Buzzing'],disabled:!ed})}</div>
         <div class="t-row"><span>Sleep</span><div class="stepper"><button data-tsleep="-0.5" ${dis} aria-label="Less sleep">−</button><b>${day.sleep!=null?day.sleep+' h':'—'}</b><button data-tsleep="0.5" ${dis} aria-label="More sleep">+</button></div></div>
         <div class="t-meals"><span class="sh-lbl">Meals</span>${meals}</div>
       </div></div>
@@ -208,4 +208,16 @@ $('#drawerBody').addEventListener('click',e=>{
     return openProfile(true);
   }
   if(b=q('[data-cycdel]')){ CYCLE.periods=CYCLE.periods.filter(p=>p.start!==b.dataset.cycdel); saveCycle(); return openProfile(true); }
+});
+
+/* tick-ruler sliders: live label while dragging, save on release */
+$('#drawerBody').addEventListener('input',e=>{
+  const r=e.target.closest('[data-ruler]'); if(!r) return;
+  const wrap=r.closest('.ruler'), labels=r.dataset.ruler==='mood'?['Low','Meh','Okay','Good','Great']:['Drained','Low','Steady','Good','Buzzing'];
+  wrap.classList.remove('unset'); wrap.querySelector('output').textContent=labels[+r.value-1]||r.value;
+});
+$('#drawerBody').addEventListener('change',e=>{
+  const r=e.target.closest('[data-ruler]'); if(!r||!drawerView||drawerView.t!=='profile') return;
+  const pid=selPerson; if(!canEdit(pid)) return;
+  const t=trk(pid), d=t.days[trkDate]=t.days[trkDate]||{}; d[r.dataset.ruler]=+r.value; saveTrk(pid);
 });

@@ -67,8 +67,16 @@ const Motion = (()=>{
       [vt.ready,vt.finished,vt.updateCallbackDone].forEach(p=>p&&p.catch(()=>{}));   // an aborted transition is harmless
     }catch(e){ update(); }
   }
-  return {reduced, countUp, enter, pop, flyTo, slide, transition};
+  // draw the day dial's arcs in, one after another
+  function drawDial(svg){
+    if(!svg||reduced()) return;
+    svg.querySelectorAll('.dial-seg').forEach((c,i)=>{
+      const len=parseFloat(c.style.getPropertyValue('--len')), C=parseFloat(c.style.getPropertyValue('--C'));
+      if(!c.animate||!len) return;
+      c.animate([{strokeDasharray:`0 ${C}`},{strokeDasharray:`${len} ${C-len}`}],{duration:620,delay:120+i*90,easing:EASE_OUT,fill:'backwards'});
+    });
+    svg.querySelectorAll('.dial-mark').forEach((g,i)=>g.animate&&g.animate([{opacity:0,transform:g.getAttribute('transform')+' scale(.4)'},{opacity:1,transform:g.getAttribute('transform')+' scale(1)'}],{duration:420,delay:420+i*90,easing:EASE_OUT,fill:'backwards'}));
+  }
+  return {reduced, countUp, enter, pop, flyTo, slide, transition, drawDial};
 })();
 
-// the three.js plate loads as a module later; queue the first request until it's ready
-window.Plate = window.Plate || { pending:null, attach(el,data){ this.pending=[el,data]; } };
