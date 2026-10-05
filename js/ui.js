@@ -830,7 +830,7 @@ function maybeRollover(){
   if(sum){ saveState(); toast(`New week planned · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}`); }
   renderEverything();
 }
-Sync.onChange(s=>{ if(['synced','local','denied','error','offline'].includes(s.status)) maybeRollover(); });
+Sync.onChange(s=>{ if(['synced','local','denied','blocked','error','offline'].includes(s.status)) maybeRollover(); });
 setInterval(()=>{ if(activeWeekStart()>state.weekStart){ rolledChecked=false; maybeRollover(); } else if(todayIndex()!==TODAY_IDX){ TODAY_IDX=todayIndex(); renderEverything(); } }, 10*60*1000);
 
 // local-only visitors (or Firebase unavailable): don't wait for a sync that will never come

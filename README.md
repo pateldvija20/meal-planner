@@ -1,17 +1,36 @@
 # The Week's Table — Meal Planner
 
-**Live:** https://pateldvija20.github.io/meal-planner/
+**Live:** https://pateldvija20.github.io/meal-planner/ · personal views: [`#dvija`](https://pateldvija20.github.io/meal-planner/#dvija) · [`#akshar`](https://pateldvija20.github.io/meal-planner/#akshar) · [`#aum`](https://pateldvija20.github.io/meal-planner/#aum)
 
-A single-file weekly meal planner for a family of three, with per-person portions, macros and a grocery list.
+A weekly meal planner for a family of three: per-person portions sized to calorie targets, family-batch cooking with leftover lunches, a grocery list split by store, and personal trackers. Synced between phones with Firebase.
 
-- **Desktop (> 760px):** the full grid, queue and recipe library with drag-and-drop.
-- **Mobile (≤ 760px):** a tabbed app —
-  - **Discover** — search/filter recipes, queue them or add straight to a day
-  - **Today** — one day at a time; switch days with the day strip, arrows or a swipe
-  - **Grocery** — auto-totalled checklist; tap an ingredient to jump to the meals that use it
-  - **Queue** — staged recipes, each with a *Place* button
-  - **Profile icon** — dashboard with calories by day, macros vs goal, estimated micronutrients and a plan breakdown
+## How the week works
+- **Every day:** morning seed water → heavy breakfast → protein shake → lunch → (weekly snack) → dinner.
+- **Leftovers:** Mon–Fri lunch is the previous night's dinner, so Sun–Thu dinners are cooked as a double batch. Weekend lunches are fresh.
+- **Diet rules:** Dvija vegetarian; Akshar & Aum get chicken 1–2× a week on a shared base (veg protein for Dvija), never Thursday or Saturday; Aum eats farali on Thursday.
+- **Generate:** "Add to plan" queues a recipe; Generate places the queue first, then fills the week from the library. The week refreshes automatically the first time anyone opens the site after Sunday 9 pm.
+- **Weekly snack box:** one no-added-sugar recipe batch-made on Sunday.
+- **Skipped / ate out:** mark any meal; totals, cooking batches and the grocery list adjust.
 
-Everything lives in `index.html`; state is saved in the browser's localStorage.
+## Targets (Mifflin-St Jeor)
+| | Target | Protein |
+|---|---|---|
+| Dvija | 1,650 kcal (lose 0.5 kg/wk) | 120 g |
+| Akshar | 2,550 kcal (lean gain) | 115 g |
+| Aum | 2,650 kcal (lean gain) | 120 g |
 
-Micronutrient figures are rough estimates (±25%) against general adult reference intakes — edit `MICROS` and `MICRO_TARGET` in the script to tune them.
+Logging a new weight in the tracker can recalculate a target.
+
+## Code
+| File | What it holds |
+|---|---|
+| `index.html`, `css/styles.css` | Page and styles (desktop grid + mobile tab app) |
+| `js/foods.js` | Food composition table (per 100 g, USDA/IFCT) with grocery aisle and default store |
+| `js/recipes.js`, `js/recipes-library.js`, `js/recipes-snacks.js` | Recipes, written per standard serving |
+| `js/model.js` | Targets, portions, leftovers, batches, grocery, generator, weekly refresh |
+| `js/sync.js` | Google sign-in + shared Firestore plan (`family/main`) |
+| `js/trackers.js` | Personal trackers (`trackers/{person}`) and Dvija's private cycle log |
+| `js/ui.js` | Rendering and interactions |
+| `firestore.rules` | Database access: family emails only; trackers owner-write; cycle log private |
+
+Nutrition figures are estimates (±10–25%), not lab data.

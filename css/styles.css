@@ -664,3 +664,4 @@
   .link-list{display:flex;flex-wrap:wrap;gap:6px}
   .link-list .btn-ghost{padding:6px 11px;font-size:12px}
   [hidden]{display:none!important}
+  .s-blocked i,.sync-dot.s-blocked{background:var(--accent)}

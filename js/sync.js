@@ -46,15 +46,15 @@ const Sync = {
       }
       this._first=false;
       this._set(navigator.onLine===false?'offline':'synced');
-    }, err=>{ console.error(err); this._set(err.code==='permission-denied'?'denied':'error'); });
+    }, err=>{ console.error(err); this._set(err.code==='permission-denied'?(this.person?'blocked':'denied'):'error'); });
   },
 
-  push(){ if(!this.user||!this.person||this.status==='denied') return; clearTimeout(this._timer); this._set('saving'); this._timer=setTimeout(()=>this._push(),600); },
+  push(){ if(!this.user||!this.person||this.status==='denied'||this.status==='blocked') return; clearTimeout(this._timer); this._set('saving'); this._timer=setTimeout(()=>this._push(),600); },
   _push(){
     const data=JSON.parse(JSON.stringify(state));             // strips undefined (Firestore rejects it)
     data.updatedBy=this.person?this.person.key:null;
     this._doc.set(data).then(()=>{ this._first=false; this._set('synced'); })
-      .catch(err=>{ console.error(err); this._set(err.code==='permission-denied'?'denied':'error'); });
+      .catch(err=>{ console.error(err); this._set(err.code==='permission-denied'?(this.person?'blocked':'denied'):'error'); });
   },
 
   signIn(){
@@ -72,5 +72,5 @@ function signInError(e){
   if(e.code==='auth/network-request-failed') return 'No connection — try signing in again when online';
   return 'Sign-in didn’t finish — try again';
 }
-const SYNC_LABEL={local:'Not synced',connecting:'Connecting…',synced:'Synced',saving:'Saving…',offline:'Offline — will sync',denied:'Not on the family list',error:'Sync error'};
+const SYNC_LABEL={blocked:'Sync blocked — database rules not published',local:'Not synced',connecting:'Connecting…',synced:'Synced',saving:'Saving…',offline:'Offline — will sync',denied:'Not on the family list',error:'Sync error'};
 onStateSaved = ()=>Sync.push();
