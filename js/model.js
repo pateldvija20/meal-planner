@@ -168,6 +168,8 @@ function normalize(st){
   if(!Array.isArray(st.snack.eaters)) st.snack.eaters=['m3'];
   ['queue','custom','history'].forEach(k=>st[k]=Array.isArray(st[k])?st[k]:[]);
   st.grocery=st.grocery||{}; st.log=st.log||{};
+  st.stores=Array.isArray(st.stores)&&st.stores.length?st.stores:STORES_DEFAULT.map(x=>Object.assign({},x));
+  st.storeMap=st.storeMap||{};
   st.weekStart=st.weekStart||activeWeekStart();
   return st;
 }
@@ -426,4 +428,20 @@ function rolloverIfNeeded(){
   if(!state.weekStart){ state.weekStart=ws; return null; }
   if(state.weekStart>=ws) return null;
   return startNewWeek(ws);
+}
+
+/* ================= stores ================= */
+const storeById=id=>state.stores.find(x=>x.id===id);
+// where an item is bought: family override, else the food's default store; null = unassigned
+function storeOf(it){ const id=state.storeMap[it.id] ?? it.store; return id && storeById(id) ? id : null; }
+function addStore(name){
+  name=(name||'').trim(); if(!name) return null;
+  const base=name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'store';
+  let id=base, i=2; while(storeById(id)) id=base+'-'+(i++);
+  state.stores.push({id,name}); return id;
+}
+function renameStore(id,name){ const st=storeById(id); if(st&&name.trim()) st.name=name.trim(); }
+function removeStore(id){
+  state.stores=state.stores.filter(x=>x.id!==id);
+  Object.keys(state.storeMap).forEach(k=>{ if(state.storeMap[k]===id) delete state.storeMap[k]; });
 }

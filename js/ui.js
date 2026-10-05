@@ -318,41 +318,65 @@ function removeCustom(id){
 }
 
 /* ================= grocery ================= */
-function groceryHTML(scope){
+let gStore = store.get('mp_gstore') || 'all';      // which store tab this phone is looking at
+const AISLES=['Proteins & dairy','Produce','Grains & legumes','Nuts, seeds & spreads','Pantry & supplements','Other'];
+function groceryModel(){
   const {items,sessions}=buildGrocery(), checked=state.grocery||{};
-  const order=['Proteins & dairy','Produce','Grains & legumes','Nuts, seeds & spreads','Pantry & supplements','Other'];
-  const groups={}; items.forEach(it=>{(groups[it.cat]=groups[it.cat]||[]).push(it);});
-  const done=items.filter(it=>checked[it.id]).length;
+  items.forEach(it=>{ it.storeId=storeOf(it); it.done=!!checked[it.id]; });
+  const sections=state.stores.map(st=>({id:st.id,name:st.name,items:items.filter(it=>it.storeId===st.id)}));
+  const un=items.filter(it=>!it.storeId); if(un.length) sections.push({id:'none',name:'Unassigned',items:un});
+  if(gStore!=='all' && !sections.some(x=>x.id===gStore)) gStore='all';
+  return {items,sessions,sections};
+}
+function groceryHTML(scope){
+  const {items,sessions,sections}=groceryModel();
   const row=it=>{
-    const isC=!!checked[it.id], open=mOpenIng===it.id;
-    let loc='';
-    if(open && it.key){ const cells=cellsForIngredient(it.key);
-      loc=`<div class="gc-loc">${cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${DAYS[c.d]} · ${SLOT_LABEL[c.slot]}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink / shake'}</div>`; }
-    return `<div class="gc-item ${isC?'done':''} ${open?'active':''}"><input type="checkbox" data-g="${esc(it.id)}" ${isC?'checked':''} aria-label="Tick off ${esc(it.n)}"><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><b class="gc-q">${it.qty||'as listed'}</b></button>${loc}</div>`;
+    const open=mOpenIng===it.id;
+    let extra='';
+    if(open){
+      const cells=it.key&&FOODS[it.key]?cellsForIngredient(it.key):[];
+      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' · '+SLOT_LABEL[c.slot]}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink / shake'):'From a custom recipe'}</div>
+        <div class="gc-move"><span>Buy at</span>${state.stores.map(st=>`<button data-setstore="${esc(it.id)}|${st.id}" class="${it.storeId===st.id?'on':''}">${esc(st.name)}</button>`).join('')}</div>`;
+    }
+    return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}"><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><b class="gc-q">${it.qty||'as listed'}</b></button>${extra}</div>`;
   };
-  const body=items.length?order.filter(g=>groups[g]).map(g=>`<div class="gc-group">${g}</div>`+groups[g].map(row).join('')).join(''):'<p class="form-note">Nothing planned yet.</p>';
-  return `<p class="${scope==='m'?'m-sub':'form-note'}">Everything for this week’s ${sessions} cooking sessions (dinners include tomorrow’s lunch) plus 7 days of morning drinks and shakes. Salt, spices, garlic-ginger and herbs are assumed on hand.</p>
-    ${items.length?`<div class="m-prog"><div class="bar" style="--sel:var(--olive)"><span style="width:${Math.round(done/items.length*100)}%"></span></div></div>
-    <div class="gc-actions"><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gcopy>Copy what's left</button><span class="hint">${done}/${items.length} ticked</span></div>`:''}
+  const byAisle=list=>AISLES.map(a=>{ const g=list.filter(it=>(it.cat||'Other')===a); return g.length?`<div class="gc-group">${a}</div>`+g.map(row).join(''):''; }).join('');
+  const shown = gStore==='all' ? sections : sections.filter(x=>x.id===gStore);
+  const visible = shown.flatMap(x=>x.items), done=visible.filter(it=>it.done).length;
+  const tabs=[{id:'all',name:'All',items}].concat(sections).map(x=>{ const d=x.items.filter(it=>it.done).length;
+    return `<button data-gstore="${x.id}" class="${gStore===x.id?'active':''}" aria-pressed="${gStore===x.id}">${esc(x.name)} <small>${d?d+'/':''}${x.items.length}</small></button>`; }).join('');
+  const body = !items.length ? '<p class="form-note">Nothing planned yet.</p>'
+    : gStore==='all' ? shown.filter(x=>x.items.length).map(x=>`<div class="gc-store"><div class="gc-store-h"><b>${esc(x.name)}</b><span>${x.items.filter(i=>i.done).length}/${x.items.length}</span></div>${x.items.map(row).join('')}</div>`).join('')
+    : (visible.length ? byAisle(visible) : `<p class="form-note">Nothing to buy at ${esc((shown[0]||{}).name||'this store')} this week.</p>`);
+  const label = gStore==='all' ? '' : ' '+((shown[0]||{}).name||'');
+  return `<p class="${scope==='m'?'m-sub':'form-note'}">Everything for this week’s ${sessions} cooking sessions (dinners include tomorrow’s lunch, plus the Sunday snack box) and 7 days of drinks and shakes. Tap an item to see where it’s used or move it to another store. Salt, spices and herbs assumed on hand.</p>
+    ${items.length?`<div class="filters g-tabs">${tabs}</div>
+    <div class="m-prog"><div class="bar" style="--sel:var(--olive)"><span style="width:${visible.length?Math.round(done/visible.length*100):0}%"></span></div></div>
+    <div class="gc-actions"><button class="btn-ghost" data-gcopy>Copy${esc(label)} list</button><button class="btn-ghost" data-gclear>Clear ticks</button><button class="btn-ghost" data-gmanage>Stores…</button><span class="hint">${done}/${visible.length} ticked</span></div>`:''}
     <div class="gc-list">${body}</div>`;
 }
 function openGrocery(keep){
   drawerView={t:'grocery'};
-  $('#drawerBody').innerHTML=`<div class="d-ctx">This week</div><h2 class="d-name">Grocery list</h2>${groceryHTML('d')}`;
+  $('#drawerBody').innerHTML=`<div class="d-ctx">Week of ${dayDate(0)}</div><h2 class="d-name">Grocery list</h2>${groceryHTML('d')}`;
   openShell(keep);
 }
 function copyGroceryText(){
-  const {items}=buildGrocery(), done=state.grocery||{}, groups={};
-  items.filter(it=>!done[it.id]).forEach(it=>{(groups[it.cat]=groups[it.cat]||[]).push(it);});
-  const secs=Object.keys(groups).map(g=>g.toUpperCase()+'\n'+groups[g].map(it=>`[ ] ${it.n} — ${it.qty||'as listed'}`).join('\n'));
-  if(!secs.length){ toast('Everything is ticked off'); return; }
-  try{ navigator.clipboard.writeText(secs.join('\n\n')).then(()=>toast('Copied items still to buy'),()=>toast('Copy isn’t available here')); }catch(e){ toast('Copy isn’t available here'); }
+  const {sections}=groceryModel();
+  const secs=(gStore==='all'?sections:sections.filter(x=>x.id===gStore)).map(x=>{
+    const left=x.items.filter(it=>!it.done); if(!left.length) return null;
+    return x.name.toUpperCase()+'\n'+left.map(it=>`[ ] ${it.n} — ${it.qty||'as listed'}`).join('\n');
+  }).filter(Boolean);
+  if(!secs.length){ toast('Everything here is ticked off'); return; }
+  try{ navigator.clipboard.writeText(secs.join('\n\n')).then(()=>toast('Copied what’s left to buy'),()=>toast('Copy isn’t available here')); }catch(e){ toast('Copy isn’t available here'); }
 }
 function onGroceryClick(e){
   const q=s=>e.target.closest(s); let b;
+  if(b=q('[data-gstore]')){ gStore=b.dataset.gstore; store.set('mp_gstore',gStore); mOpenIng=null; return true; }
+  if(b=q('[data-setstore]')){ const [id,sid]=b.dataset.setstore.split('|'); state.storeMap[id]=sid; saveState(); toast(`Moved to ${storeById(sid).name} for everyone`); return true; }
   if(b=q('[data-ing]')){ mOpenIng=mOpenIng===b.dataset.ing?null:b.dataset.ing; return true; }
   if(q('[data-gclear]')){ state.grocery={}; saveState(); return true; }
   if(q('[data-gcopy]')){ copyGroceryText(); return false; }
+  if(q('[data-gmanage]')){ openStoresSheet(); return false; }
   return false;
 }
 function onGroceryChange(e){
@@ -360,6 +384,27 @@ function onGroceryChange(e){
   if(cb.checked) state.grocery[cb.dataset.g]=1; else delete state.grocery[cb.dataset.g];
   saveState(); return true;
 }
+/* manage stores (sheet) */
+function openStoresSheet(){
+  sheetState={t:'stores'};
+  const {items}=buildGrocery(); items.forEach(it=>it.storeId=storeOf(it));
+  openSheet('Grocery','Your stores',`
+    <p class="m-sub">Rename, add or remove stores. Removing a store moves its items to their default store, or to “Unassigned”.</p>
+    <div class="store-list">${state.stores.map(st=>`<div class="store-row"><input type="text" value="${esc(st.name)}" data-rename="${st.id}" aria-label="Store name"><small>${items.filter(i=>i.storeId===st.id).length} items</small><button class="m-ic" data-delstore="${st.id}" aria-label="Remove ${esc(st.name)}">×</button></div>`).join('')}</div>
+    <div class="store-add"><input type="text" id="newStore" placeholder="Add a store — e.g. Trader Joe’s" autocomplete="off"><button class="btn-solid" data-addstore>Add</button></div>`);
+}
+$('#sheet').addEventListener('click',e=>{
+  if(!sheetState||sheetState.t!=='stores') return;
+  const q=s=>e.target.closest(s); let b;
+  if(q('[data-addstore]')){ const id=addStore($('#newStore').value); if(!id) return toast('Type a store name first'); commit(); openStoresSheet(); return toast('Store added'); }
+  if(b=q('[data-delstore]')){
+    if(state.stores.length<=1) return toast('Keep at least one store');
+    if(!b.dataset.armed){ b.dataset.armed='1'; b.textContent='✓'; b.setAttribute('aria-label','Tap again to remove'); toast('Tap again to remove this store'); return; }
+    removeStore(b.dataset.delstore); commit(); openStoresSheet(); return toast('Store removed');
+  }
+});
+$('#sheet').addEventListener('change',e=>{ const i=e.target.closest('[data-rename]'); if(!i||!sheetState||sheetState.t!=='stores') return; renameStore(i.dataset.rename,i.value); commit(); });
+$('#sheet').addEventListener('keydown',e=>{ if(e.key==='Enter' && e.target.id==='newStore'){ e.preventDefault(); $('[data-addstore]').click(); } });
 function jumpTo(key){
   const {d,slot}=parseCtx(key);
   if(isMobile()){ mDay=d; closeDrawer(); setTab('today'); return; }
@@ -550,7 +595,10 @@ function openProfile(keep){
     <div class="d-sec"><h3>The plan <small>${21-empty.length} of 21 meals planned</small></h3>
       <div class="sh-lbl">Most repeated</div><ul class="pf-list">${top.map(([rid,n])=>`<li><span>${esc(rec(rid).name)}</span><span>×${n}</span></li>`).join('')||'<li><span>Nothing planned yet</span><span></span></li>'}</ul>
       <div class="sh-lbl">Open meals</div><p class="pf-note" style="margin:0">${empty.length?esc(empty.join(' · ')):'Every meal has something planned.'}</p></div>
-    <div class="d-sec"><h3>Settings</h3><div class="pf-set"><span>Units</span><div class="seg">${[['us','US · oz'],['metric','Metric · g']].map(([u,l])=>`<button data-pfu="${u}" class="${u===units?'active':''}">${l}</button>`).join('')}</div></div></div>`;
+    <div class="d-sec"><h3>Settings</h3>
+      <div class="pf-set"><span>Grocery stores<small class="pf-sub">${state.stores.map(x=>esc(x.name)).join(' · ')}</small></span><button class="btn-ghost" data-gmanage>Manage</button></div>
+      <div class="pf-set"><span>Weekly snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>
+      <div class="pf-set"><span>Units</span><div class="seg">${[['us','US · oz'],['metric','Metric · g']].map(([u,l])=>`<button data-pfu="${u}" class="${u===units?'active':''}">${l}</button>`).join('')}</div></div></div>`;
   drawerView={t:'profile'};
   openShell(keep);
 }
