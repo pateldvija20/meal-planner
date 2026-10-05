@@ -542,3 +542,16 @@
   .m-cook{font-size:12.5px;line-height:1.4;color:#5a4f3e;background:#F0E7D4;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:12px 0 0}
   .m-item .m-btn.sm{margin-right:2px}
   .d-tagrow .tag.ghost{color:var(--ink-soft);background:transparent;border:1px solid var(--line-2)}
+  /* phase 3: badges, cuisine chips */
+  .badges{display:flex;flex-wrap:wrap;gap:5px;padding-left:6px}
+  .m-card .badges,.drawer .badges{padding-left:0;margin-top:8px}
+  .drawer .badges{margin:8px 0 12px}
+  .badge{font-family:"IBM Plex Mono";font-size:9.5px;letter-spacing:.04em;padding:2px 8px;border-radius:999px;border:1px solid var(--line-2);color:var(--ink-soft);background:var(--card);white-space:nowrap}
+  .badge.ch{border-color:#d9b98d;color:#8a5a1c;background:#fbf1e2}
+  .badge.pc{border-color:#bcdcc6;color:#2f6d4f;background:#e8f2ea}
+  .filters.cuisines{margin:-6px 0 16px}
+  .filters.cuisines button{font-size:10px;padding:5px 10px;text-transform:none;letter-spacing:0}
+  .m-chips.cuisines{margin-top:-6px}
+  .ing-who{display:block;font-family:"IBM Plex Mono";font-size:10px;color:var(--ink-soft)}
+  .search input[type=text]{padding-left:36px}
+  .m-chips.cuisines{margin:-6px -16px 14px}

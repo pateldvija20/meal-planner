@@ -45,31 +45,48 @@ const DAYNOTE=['','','','Farali · Aum','','','Cook for Mon lunch'];
 const CATS={breakfast:'#B27E23', main:'#BE5630', drink:'#2E6E7E', shake:'#2E6E7E'};
 const CAT_LABEL={breakfast:'breakfast', main:'lunch & dinner', drink:'daily', shake:'daily'};
 
+/* ================= protein variants (shared-base chicken dishes) ================= */
+const CHICKEN_EATERS=['m1','m2'];           // Akshar & Aum eat chicken; Dvija is vegetarian
+const NO_CHICKEN_DAYS=[3,5];                // never on Thursday or Saturday (day the food is EATEN)
+// which protein a person gets from a two-protein recipe; d = day eaten (null = generic view)
+function variantFor(r,pid,d){
+  if(!r||!r.protein) return null;
+  return CHICKEN_EATERS.includes(pid) && !NO_CHICKEN_DAYS.includes(d) ? 'chicken' : 'veg';
+}
+const recipeIng=(r,variant)=> r.protein ? (r.ing||[]).concat([r.protein[variant||'veg']]) : (r.ing||[]);
+
 /* ================= nutrition ================= */
 const nutCache={};
 function gramsOf(foodKey,qty,unit){ const f=FOODS[foodKey]; return unit===''? qty*((f&&f.each)||100) : qty; }
-function nutritionOf(r){                    // per ONE serving
-  if(nutCache[r.id]) return nutCache[r.id];
+function nutritionOf(r,variant){            // per ONE serving
+  const ck=r.id+'|'+(variant||'');
+  if(nutCache[ck]) return nutCache[ck];
   const t=Object.fromEntries(NKEYS.map(k=>[k,0]));
   if(r.per){ Object.assign(t,r.per); }
-  else (r.ing||[]).forEach(([k,q,u])=>{ const f=FOODS[k]; if(!f) return; const g=gramsOf(k,q,u); NKEYS.forEach((key,i)=>t[key]+=f.n[i]*g/100); });
+  else recipeIng(r,variant).forEach(([k,q,u])=>{ const f=FOODS[k]; if(!f) return; const g=gramsOf(k,q,u); NKEYS.forEach((key,i)=>t[key]+=f.n[i]*g/100); });
   t.known = !r.per;                         // micros only meaningful when computed from foods
-  return nutCache[r.id]=t;
+  return nutCache[ck]=t;
+}
+// derived labels
+const hasEgg=r=>recipeIng(r,'veg').some(i=>i[0]==='egg'||i[0]==='eggwhite');
+function isPcodFriendly(r){                 // high fibre + high protein + whole grains (no maida/white rice in library)
+  if(r.fixed||r.custom) return false;
+  const n=nutritionOf(r,'veg'); return n.fib>=7 && n.p>=18;
 }
 const scaleN=(n,s)=>{ const o={}; NKEYS.forEach(k=>o[k]=n[k]*s); o.known=n.known; return o; };
 function fixedKcal(pid){ return nutritionOf(rec(FIXED.drink[pid])).kcal + nutritionOf(rec(FIXED.shake[pid])).kcal; }
 function slotBudget(pid,slot){ const p=personById(pid); return (p.target - fixedKcal(pid)) * SPLIT[slot]; }
 // servings of recipe r for person pid in slot (quarter-serving steps)
-function servingsFor(r,pid,slot){
+function servingsFor(r,pid,slot,d){
   if(!r) return 0;
   if(r.fixed) return 1;
-  const s = slotBudget(pid,slot) / (nutritionOf(r).kcal||1);
+  const s = slotBudget(pid,slot) / (nutritionOf(r,variantFor(r,pid,d)).kcal||1);
   return Math.min(4, Math.max(0.5, Math.round(s*4)/4));
 }
-function portion(rid,pid,slot){
+function portion(rid,pid,slot,d){
   const r=rec(rid); if(!r) return null;
-  const s=servingsFor(r,pid,slot), n=nutritionOf(r);
-  return {s, kcal:Math.round(n.kcal*s), p:Math.round(n.p*s), c:Math.round(n.c*s), f:Math.round(n.f*s), n:scaleN(n,s)};
+  const v=variantFor(r,pid,d), s=servingsFor(r,pid,slot,d), n=nutritionOf(r,v);
+  return {s, v, kcal:Math.round(n.kcal*s), p:Math.round(n.p*s), c:Math.round(n.c*s), f:Math.round(n.f*s), n:scaleN(n,s)};
 }
 
 /* ================= quantities & formatting ================= */
@@ -83,9 +100,11 @@ function roundQty(q,u){
   if(u==='g'||u==='ml') return q>=100? Math.round(q/10)*10 : Math.max(5,Math.round(q/5)*5);
   return Math.round(q*2)/2 || 0.5;          // counts in halves
 }
-function serveText(r,servings){
+function serveText(r,servings,variant){
   if(r.serveText) return r.serveText;
-  return (r.serve||[]).map(([q,u,l])=>{
+  const items=(r.serve||[]).slice();
+  if(r.protein){ const [,q,u,l]=r.protein[variant||'veg']; items.push([q,u,l]); }
+  return items.map(([q,u,l])=>{
     const v=roundQty(q*servings,u);
     if(u==='g'||u==='ml') return `${fmtQty(v,u)} ${l}`;
     return `${niceCount(v)}${u&&u!==''?' '+u:''} ${l}`;
@@ -168,17 +187,18 @@ const eatersOf=(d,slot)=>PEOPLE.filter(p=>!(isFarali(p.id,d)&&(slot==='lunch'||s
 // one cooking session: recipe + everyone's servings (dinner includes tomorrow's leftover lunch)
 function batchFor(d,slot){
   const m=mealFor(d,slot); if(!m||m.leftover||m.fixed) return null;
-  const parts=eatersOf(d,slot).map(pid=>({pid,day:d,slot,s:servingsFor(rec(m.rid),pid,slot)}));
+  const r=rec(m.rid);
+  const parts=eatersOf(d,slot).map(pid=>({pid,day:d,slot,s:servingsFor(r,pid,slot,d)}));
   if(slot==='dinner'){
     const n=nextDay(d);
     const nextIsLeftover = d===6 ? true : isLeftoverLunch(n);   // Sunday dinner feeds next Monday
-    if(nextIsLeftover) eatersOf(n,'lunch').forEach(pid=>parts.push({pid,day:n,slot:'lunch',s:servingsFor(rec(m.rid),pid,'lunch'),leftover:true}));
+    if(nextIsLeftover) eatersOf(n,'lunch').forEach(pid=>parts.push({pid,day:n,slot:'lunch',s:servingsFor(r,pid,'lunch',n),leftover:true}));
   }
   return {rid:m.rid, d, slot, parts, servings:parts.reduce((a,p)=>a+p.s,0)};
 }
 function faraliBatch(slot){
   const rid=state.farali[slot]; if(!rid) return null;
-  return {rid, d:FARALI.day, slot, farali:true, parts:[{pid:FARALI.pid,day:FARALI.day,slot,s:servingsFor(rec(rid),FARALI.pid,slot)}], get servings(){return this.parts[0].s;}};
+  return {rid, d:FARALI.day, slot, farali:true, parts:[{pid:FARALI.pid,day:FARALI.day,slot,s:servingsFor(rec(rid),FARALI.pid,slot,FARALI.day)}], get servings(){return this.parts[0].s;}};
 }
 // every cooking session this week (what the grocery list is built from)
 function weekBatches(){
@@ -187,16 +207,23 @@ function weekBatches(){
   ['lunch','dinner'].forEach(s=>{ const b=faraliBatch(s); if(b) out.push(b); });
   return out;
 }
-function batchIngredients(r,servings){
-  return (r.ing||[]).map(([k,q,u])=>({key:k,name:(FOODS[k]||{name:k}).name,q:q*servings,u}));
+// ingredients for a set of portions [{pid,day,s}] — each part uses that person's protein for that day
+function batchIngredients(r,parts){
+  const agg={}, order=[];
+  parts.forEach(p=>recipeIng(r,variantFor(r,p.pid,p.day)).forEach(([k,q,u])=>{
+    if(!agg[k]){ agg[k]={key:k,name:(FOODS[k]||{name:k}).name,q:0,u,who:new Set()}; order.push(k); }
+    agg[k].q+=q*p.s; if(r.protein && (k===r.protein.veg[0]||k===r.protein.chicken[0])) agg[k].who.add(p.pid);
+  }));
+  return order.map(k=>agg[k]);
 }
+const genericParts=(r,slot)=>PEOPLE.map(p=>({pid:p.id,day:null,slot,s:servingsFor(r,p.id,slot,null)}));
 
 /* ================= totals ================= */
 function dayTotals(d,pid){
   const t=Object.fromEntries(NKEYS.map(k=>[k,0])); t.n=0; t.unk=0;
   SLOTS.forEach(s=>{
     const m=mealFor(d,s.id,pid); if(!m) return;
-    const pt=portion(m.rid,pid,s.id); if(!pt) return;
+    const pt=portion(m.rid,pid,s.id,d); if(!pt) return;
     NKEYS.forEach(k=>t[k]+=pt.n[k]); if(!s.fixed) t.n++; if(!pt.n.known) t.unk++;
   });
   ['kcal','p','c','f'].forEach(k=>t[k]=Math.round(t[k]));
@@ -218,7 +245,7 @@ function buildGrocery(){
   };
   weekBatches().forEach(b=>{ sessions++; const r=rec(b.rid); if(!r) return;
     if(r.custom){ (r.ingText||[]).forEach(t=>{ const id='txt:'+t.toLowerCase(); agg[id]=agg[id]||{id,n:t,cat:'Other',g:0,count:0,u:'txt'}; }); return; }
-    (r.ing||[]).forEach(([k,q,u])=>add(k,q*b.servings,u));
+    batchIngredients(r,b.parts).forEach(it=>add(it.key,it.q,it.u));
   });
   // fixed daily items × 7 days
   PEOPLE.forEach(p=>['drink','shake'].forEach(s=>{ const r=rec(FIXED[s][p.id]); (r.ing||[]).forEach(([k,q,u])=>add(k,q*7,u)); }));
@@ -234,8 +261,8 @@ function cellsForIngredient(key){
   const cells=[];
   DAYS.forEach((_,d)=>MEAL_SLOTS.forEach(slot=>{
     const m=mealFor(d,slot); if(!m) return; const r=rec(m.rid);
-    if(r && (r.ing||[]).some(i=>i[0]===key)) cells.push({d,slot,leftover:!!m.leftover});
+    if(r && recipeIng(r,'veg').concat(r.protein?[r.protein.chicken]:[]).some(i=>i[0]===key)) cells.push({d,slot,leftover:!!m.leftover});
   }));
-  ['lunch','dinner'].forEach(slot=>{ const r=rec(state.farali[slot]); if(r&&(r.ing||[]).some(i=>i[0]===key)) cells.push({d:FARALI.day,slot,farali:true}); });
+  ['lunch','dinner'].forEach(slot=>{ const r=rec(state.farali[slot]); if(r&&recipeIng(r,'veg').some(i=>i[0]===key)) cells.push({d:FARALI.day,slot,farali:true}); });
   return cells;
 }

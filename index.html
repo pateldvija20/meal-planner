@@ -58,6 +58,7 @@
     <div class="filters" id="filters"></div>
     <button id="newRecipe" class="new-btn">+ New recipe</button>
   </div>
+  <div class="filters cuisines" id="cuisines"></div>
   <div class="lib" id="lib"></div>
 
   <footer id="footer"></footer>
@@ -77,6 +78,7 @@
       <div class="m-title"><h2 class="m-h2">Discover</h2><span class="hint" id="mLibCount"></span></div>
       <div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="mSearch" type="text" enterkeyhint="search" placeholder="Search recipes, ingredients, tags…" autocomplete="off"></div>
       <div class="filters m-chips" id="mFilters"></div>
+      <div class="filters m-chips cuisines" id="mCuisines"></div>
       <div id="mLib"></div>
       <button class="m-btn ghost wide" id="mNewRecipe">+ New recipe</button>
     </section>
@@ -105,6 +107,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="js/foods.js"></script>
 <script src="js/recipes.js"></script>
+<script src="js/recipes-library.js"></script>
 <script src="js/model.js"></script>
 <script src="js/sync.js"></script>
 <script src="js/ui.js"></script>
