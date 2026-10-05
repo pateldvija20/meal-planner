@@ -4,11 +4,11 @@ const mifflin = p => 10*p.kg + 6.25*p.cm - 5*p.age + (p.sex==='f' ? -161 : 5);
 const round50 = x => Math.round(x/50)*50;
 const PEOPLE = [
   {id:'m3', key:'dvija',  label:'Dvija',  note:'losing',  goal:'Lose 0.5 kg/wk · build muscle', sex:'f', age:25, kg:80, cm:175.3, act:1.375, adj:-550, protein:120,
-    email:'pateldvija20@gmail.com', hex:'#2E6E7E'},
+    email:'pateldvija20@gmail.com', hex:'#1F7A72'},
   {id:'m1', key:'akshar', label:'Akshar', note:'gaining', goal:'Lean gain 0.25 kg/wk · build muscle', sex:'m', age:25, kg:59, cm:172.7, act:1.465, adj:275, protein:115,
-    email:'axr230102@gmail.com', hex:'#B27E23'},
+    email:'axr230102@gmail.com', hex:'#B26A12'},
   {id:'m2', key:'aum',    label:'Aum',    note:'gaining', goal:'Lean gain 0.25 kg/wk · build muscle', sex:'m', age:25, kg:62, cm:180.3, act:1.465, adj:275, protein:120,
-    email:'aumsathwara2811@gmail.com', hex:'#8A4767'},
+    email:'aumsathwara2811@gmail.com', hex:'#7A4E8C'},
 ];
 function computePerson(p){
   p.bmr = Math.round(mifflin(p));
@@ -46,7 +46,7 @@ const SPLIT={breakfast:.36, lunch:.30, dinner:.34};     // share of what's left 
 const LEFTOVER_DAYS=[0,1,2,3,4];                         // Mon–Fri lunch = previous night's dinner
 const FARALI={pid:'m2', day:3};                          // Aum eats farali lunch + dinner on Thursday
 const DAYNOTE=['','','','Farali · Aum','','','Cook for Mon lunch'];
-const CATS={breakfast:'#B27E23', main:'#BE5630', drink:'#2E6E7E', shake:'#2E6E7E', snack:'#5C6A43'};
+const CATS={breakfast:'#D79A12', main:'#B9432B', drink:'#2F6FA8', shake:'#2F6FA8', snack:'#2B7346'};
 const CAT_LABEL={breakfast:'breakfast', main:'lunch & dinner', drink:'daily', shake:'daily', snack:'weekly snack'};
 
 /* ================= protein variants (shared-base chicken dishes) ================= */

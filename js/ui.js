@@ -61,13 +61,13 @@ function setMealView(d,slot,rid,pid=selPerson){
     if(r.cat!=='snack'){ toast('Pick a snack-box recipe for the weekly snack'); return false; }
     state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
   }
-  if(r.cat==='snack'){ toast('That’s a snack-box recipe — it goes in the weekly snack'); return false; }
+  if(r.cat==='snack'){ toast('That’s a snack-box recipe. It goes in the weekly snack.'); return false; }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){
-    if(!r.farali){ toast(`${personById(pid).label}'s Thursday needs a farali recipe`); return false; }
+    if(!r.farali){ toast(`${personById(pid).label}’s Thursday needs a farali recipe`); return false; }
     state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
   }
-  if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch/dinner recipe — pick a breakfast'); return false; }
-  if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast — pick a lunch/dinner recipe'); return false; }
+  if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch or dinner recipe. Pick a breakfast.'); return false; }
+  if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast. Pick a lunch or dinner recipe.'); return false; }
   const day=state.plan[d];
   if(slot==='lunch' && LEFTOVER_DAYS.includes(d)) day.lunchFresh=true;
   day[slot]=rid; armed=null; commit();
@@ -78,18 +78,27 @@ function removeMealView(d,slot,pid=selPerson){
   if(slot==='snack'){ state.snack.rid=null; return commit(); }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ state.farali[slot]=null; return commit(); }
   const day=state.plan[d];
-  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off — add a fresh lunch'); }
+  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off. Add a fresh lunch.'); }
   day[slot]=null; delete day.locks[slot]; commit();
 }
 function useLeftovers(d){ const day=state.plan[d]; day.lunchFresh=false; day.lunch=null; delete day.locks.lunch; commit(); toast(`${DAYS[d]} lunch is ${d===0?'Sunday':DAYS[d-1]}’s dinner again`); }
 function toggleLock(d,slot){
   if(slot==='snack'){ state.snack.locked=!state.snack.locked; commit(); return toast(state.snack.locked?'Snack box locked for next week too':'Unlocked'); }
-  const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked — Generate will keep it':'Unlocked');
+  const l=state.plan[d].locks; l[slot]=!l[slot]; if(!l[slot]) delete l[slot]; commit(); toast(l[slot]?'Locked. Generate will keep it.':'Unlocked');
+  requestAnimationFrame(()=>Motion.pop(document.querySelector(`[data-mlock="${d}|${slot}"],[data-lock="${d}|${slot}"]`)));
 }
 function toggleQueue(id){
-  if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to plan — tap Generate to place it'); }
+  if(!state.queue.includes(id)){ state.queue.push(id); toast('Added to the plan queue. Generate places it.'); }
   else { state.queue=state.queue.filter(x=>x!==id); toast('Removed from the plan queue'); }
   armed=null; commit();
+}
+// "Add to plan": toggle, then fly a dot from the button to wherever the queue lives
+function addToPlan(btn,id){
+  const adding=!state.queue.includes(id), from=btn?btn.getBoundingClientRect():null;
+  toggleQueue(id);
+  if(!adding||!from) return;
+  const target = isMobile() ? (document.querySelector('[data-tab="queue"]')) : ($('#qcount'));
+  Motion.flyTo(from,target,()=>Motion.pop(isMobile()?document.querySelector('.m-badge'):$('#qcount')));
 }
 function runGenerate(mode){
   let sum;
@@ -97,9 +106,11 @@ function runGenerate(mode){
   else sum=generateWeek({from: mode==='rest' ? TODAY_IDX+1 : 0});
   TODAY_IDX=todayIndex(); if(mode==='next') mDay=0;
   commit();
+  requestAnimationFrame(()=>Motion.enter(document.querySelectorAll(isMobile()?'#mToday .m-meal':'#cal .chip:not(.fixed)'),{stagger:isMobile()?45:12,max:isMobile()?8:40}));
   toast(`${mode==='next'?'Next week planned':'Plan refreshed'} · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}${sum.chicken?` · ${sum.chicken} chicken night${sum.chicken>1?'s':''}`:''}`);
 }
-function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit(); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
+function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit();
+  requestAnimationFrame(()=>Motion.pop(document.querySelector(`[data-mstatus="${d}|${slot}"]`))); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
 function resetPlan(){ const s=seedState(); s.queue=state.queue; s.custom=state.custom; s.grocery={}; state=normalize(s); commit(); toast('Week reset to the starter plan'); }
 
 /* ================= desktop ================= */
@@ -128,12 +139,12 @@ function renderCal(){
   const pid=selPerson, pp=person();
   let h=`<div class="corner"></div>`+DAYS.map((d,i)=>`<div class="day-h ${i===TODAY_IDX?'is-today':''}">${d} <span class="dnum">${dayDate(i).split(' ')[1]}</span><small>${DAYNOTE[i]||'&nbsp;'}</small></div>`).join('');
   SLOTS.forEach(s=>{
-    h+=`<div class="row-lbl">${s.label}</div>`;
+    h+=`<div class="row-lbl">${s.label}${s.id==='snack'&&state.snack.rid?`<small class="row-sub">for ${state.snack.eaters.map(id=>personById(id).label).join(', ')}</small>`:''}</div>`;
     DAYS.forEach((_,d)=>{
       const m=mealFor(d,s.id,pid), key=d+'|'+s.id;
       let inner = m ? chipHtml(m,d,s.id,pid) : '';
       if(!m && s.id==='snack'){
-        inner = state.snack.rid ? `<span class="cell-empty">not in ${pp.label}’s snack box</span>` : `<span class="cell-empty">drop a snack-box recipe</span>`;
+        inner = state.snack.rid ? `<span class="cell-empty" aria-label="Not in ${pp.label}’s snack box">–</span>` : `<span class="cell-empty">Drop a snack-box recipe</span>`;
       } else if(!m && !s.fixed){
         inner = (s.id==='lunch' && LEFTOVER_DAYS.includes(d) && state.plan[d].lunchFresh && !isFarali(pid,d))
           ? `<button class="use-lo" data-uselo="${d}">↩ use ${d===0?'Sunday':DAYS[d-1]} leftovers</button>` : `<span class="cell-empty">${armed?'tap to place':'drop a recipe'}</span>`;
@@ -153,7 +164,7 @@ function renderCal(){
 }
 function renderQueue(){
   $('#qcount').textContent=state.queue.length;
-  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Nothing queued. Tap “Add to plan” on any recipe — Generate places queued recipes first, then fills the rest of the week.</div>'; return; }
+  if(!state.queue.length){ $('#qstrip').innerHTML='<div class="q-empty">Nothing queued. Tap “Add to plan” on any recipe. Generate places queued recipes first, then fills the rest of the week.</div>'; return; }
   $('#qstrip').innerHTML=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="q-chip ${armed&&armed.rid===rid&&armed.qi===i?'armed':''}" draggable="true" data-rid="${rid}" data-qi="${i}" style="--cat:${CATS[r.cat]}"><div><div class="qn">${esc(shortName(r))}</div><div class="qm">${pt.kcal} kcal · ${pt.p}g P · ${person().label}</div></div><button data-deq="${i}" title="Remove from queue" aria-label="Remove from queue">×</button></div>`;
   }).join('');
@@ -404,10 +415,14 @@ function onGroceryClick(e){
   if(q('[data-gmanage]')){ openStoresSheet(); return false; }
   return false;
 }
+let gTimer=null;
 function onGroceryChange(e){
   const cb=e.target.closest('[data-g]'); if(!cb) return false;
   if(cb.checked) state.grocery[cb.dataset.g]=1; else delete state.grocery[cb.dataset.g];
-  saveState(); return true;
+  const row=cb.closest('.gc-item'); if(row) row.classList.toggle('done',cb.checked);
+  saveState();
+  clearTimeout(gTimer); gTimer=setTimeout(renderEverything, Motion.reduced()?0:420);   // let the check + strike-through play first
+  return false;
 }
 /* manage stores (sheet) */
 function openStoresSheet(){
@@ -448,10 +463,16 @@ function renderMobile(){
   $('#mKicker').textContent = Sync.user ? `${SYNC_LABEL[Sync.status]} · ${Sync.person?Sync.person.label:''}` : 'Family of three · not synced';
   $('#mPeople').innerHTML=PEOPLE.map(p=>`<button data-mp="${p.id}" class="${p.id===selPerson?'active':''}" aria-pressed="${p.id===selPerson}"><span class="dot" style="background:${p.hex}"></span>${p.label}</button>`).join('');
   $('#mTabs').innerHTML=TABS.map(([id,l])=>`<button class="m-tab ${id===mTab?'active':''}" data-tab="${id}" ${id===mTab?'aria-current="page"':''}>${ICON[id]}${l}${id==='queue'&&state.queue.length?`<span class="m-badge">${state.queue.length}</span>`:''}</button>`).join('');
+  Motion.slide('tabs',$('#mTabs'),'tab-ind',TABS.findIndex(x=>x[0]===mTab));
+  Motion.slide('people',$('#mPeople'),'seg-ind',PEOPLE.findIndex(p=>p.id===selPerson));
   document.querySelectorAll('.m-panel').forEach(p=>p.hidden=p.dataset.panel!==mTab);
   ({discover:renderMDiscover,today:renderMToday,grocery:renderMGrocery,queue:renderMQueue})[mTab]();
 }
-function setTab(t){ mTab=t; store.set('mp_tab',t); renderMobile(); window.scrollTo(0,0); }
+function setTab(t){
+  if(t===mTab){ window.scrollTo({top:0,behavior:Motion.reduced()?'auto':'smooth'}); return; }
+  mTab=t; store.set('mp_tab',t);
+  Motion.transition(()=>{ renderMobile(); window.scrollTo(0,0); });
+}
 function renderMDiscover(){
   $('#mFilters').innerHTML=LIB_FILTERS.map(([c,l])=>`<button data-mf="${c}" class="${c===filter?'active':''}">${l}</button>`).join('');
   if($('#mSearch').value!==query) $('#mSearch').value=query;
@@ -467,8 +488,10 @@ function renderMDiscover(){
       <div class="m-card-actions"><button class="m-btn ${inQ?'ghost added':''}" data-mq="${r.id}">${inQ?'✓ Queued for Generate':'+ Add to plan'}</button></div></article>`;
   }).join('');
 }
+let lastSumKcal=null, lastSumKey=null;
 function renderMToday(dir){
   const pid=selPerson, pp=person(), t=dayTotals(mDay,pid), g=macroGuide(pid);
+  const eTot=(t.p*4+t.c*4+t.f*9)||1, share={p:t.p*4/eTot,c:t.c*4/eTot,f:t.f*9/eTot};
   const pct=Math.round(t.kcal/pp.target*100), over=pp.note==='losing'&&t.kcal>pp.target*1.05;
   const days=DAYS.map((dn,d)=>{ const w=Math.min(100,Math.round(dayTotals(d,pid).kcal/pp.target*100));
     return `<button class="m-day ${d===mDay?'active':''} ${d===TODAY_IDX?'is-today':''}" data-day="${d}" aria-pressed="${d===mDay}" aria-label="${FULLDAY[d]}${d===TODAY_IDX?' (today)':''}">${dn}<span class="pip"><i style="width:${w}%"></i></span></button>`; }).join('');
@@ -493,9 +516,9 @@ function renderMToday(dir){
     return `<div class="m-meal"><div class="m-meal-h"><span>${s.label}</span>${kc?`<b>${kc} kcal</b>`:''}</div>${body}</div>`;
   }).join('');
   const dinnerBatch=batchFor(mDay,'dinner');
-  const cookNote = dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? `<p class="m-cook">Tonight: cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))} — includes ${FULLDAY[nextDay(mDay)]}’s lunch.</p>` : '';
+  const cookNote = dinnerBatch && dinnerBatch.parts.some(p=>p.leftover) ? `<p class="m-cook">Tonight, cook ${niceCount(dinnerBatch.servings)} servings of ${esc(shortName(rec(dinnerBatch.rid)))}. That covers ${FULLDAY[nextDay(mDay)]}’s lunch too.</p>` : '';
   const snackR=rec(state.snack.rid);
-  const snackNote = mDay===0 && snackR ? `<p class="m-cook">Snack box this week: ${esc(snackR.name)} — prep ${snackBatch()?snackBatch().servings:0} servings on Sunday (keeps ${esc(snackR.keeps||'a week')}).</p>` : '';
+  const snackNote = mDay===0 && snackR ? `<p class="m-cook">Snack box this week: ${esc(snackR.name)}. Prep ${snackBatch()?snackBatch().servings:0} servings on Sunday; it keeps ${esc(snackR.keeps||'a week')}.</p>` : '';
   const faraliNote = mDay===FARALI.day && pid!==FARALI.pid ? `<p class="m-cook">Aum eats farali today: ${esc(state.farali.lunch?shortName(rec(state.farali.lunch)):'—')} for lunch, ${esc(state.farali.dinner?shortName(rec(state.farali.dinner)):'—')} for dinner.</p>`:'';
   $('#mToday').innerHTML=`
     <div class="m-days" style="--sel:${pp.hex}">${days}</div>
@@ -503,20 +526,28 @@ function renderMToday(dir){
       <div class="m-dayhead"><div><div class="d-ctx">${mDay===TODAY_IDX?'Today':dayDate(mDay)}${mDay===TODAY_IDX?' · '+dayDate(mDay):''}${DAYNOTE[mDay]?' · '+DAYNOTE[mDay]:''}</div><h2 class="m-h2">${FULLDAY[mDay]}</h2></div>
         <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
       <div class="m-sum">
-        <div class="m-sum-top"><div><span class="big ${over?'over':''}">${t.kcal.toLocaleString()}</span><span class="of">/ ${pp.target.toLocaleString()} kcal · ${pp.label}</span></div><span class="pct">${pct}%</span></div>
-        <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${Math.min(100,pct)}%"></span></div>
-        <div class="m-stats">${stat('Protein',t.p,g.p,'var(--pro)')}${stat('Carbs',t.c,g.c,'var(--carb)')}${stat('Fat',t.f,g.f,'var(--fat)')}</div>
+        <div class="plate" role="img" aria-label="Energy split: protein ${Math.round(share.p*100)}%, carbs ${Math.round(share.c*100)}%, fat ${Math.round(share.f*100)}%" style="--p:${share.p.toFixed(3)};--c:${share.c.toFixed(3)};--f:${share.f.toFixed(3)}"><div class="plate-fallback"></div></div>
+        <div class="m-sum-main">
+          <div class="m-sum-top"><div><span class="big ${over?'over':''}" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal for ${pp.label}</span></div><span class="pct ${over?'over':''}">${pct}%</span></div>
+          <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${Math.min(100,pct)}%"></span></div>
+          <div class="m-stats">${stat('Protein',t.p,g.p,'var(--pro)')}${stat('Carbs',t.c,g.c,'var(--carb)')}${stat('Fat',t.f,g.f,'var(--fat)')}</div>
+        </div>
       </div>
       ${cookNote}${snackNote}${faraliNote}${rows}
     </div>
     <div class="m-foot"><button class="btn-solid" data-gen>${ICON.spark} Generate</button><button class="btn-ghost" id="mReset">↺ Starter plan</button></div>`;
+  Motion.slide('days',$('#mToday .m-days'),'day-ind',mDay);
+  const key=pid+'|'+mDay;
+  if(key!==lastSumKey) Motion.countUp($('#mToday [data-kcal]'),t.kcal,lastSumKcal);
+  lastSumKcal=t.kcal; lastSumKey=key;
+  window.Plate.attach($('#mToday .plate'),{p:t.p,c:t.c,f:t.f,key,dir:dir||1});
 }
 function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery list</h2></div>${groceryHTML('m')}`; }
 function renderMQueue(){
   const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="m-item" style="--cat:${CATS[r.cat]}"><button class="m-hit" data-open="${rid}"><span class="nm">${esc(r.name)}</span><span class="meta">${r.farali?'farali':CAT_LABEL[r.cat]} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
-    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week — 1–2 chicken nights, reheatable Sun–Thu dinners, no recipe more than twice.</p>
+    <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week: 1–2 chicken nights, reheatable Sun–Thu dinners, and no recipe more than twice.</p>
     <button class="btn-solid wide gen-big" data-gen>${ICON.spark} Generate plan</button>
     ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Your queue is empty. Browse recipes and tap <b>+ Queue</b> to stage them here.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
 }
@@ -653,7 +684,7 @@ $('#search').addEventListener('input',e=>{ query=e.target.value; renderLib(); re
 $('#syncBox').addEventListener('click',e=>{ if(e.target.closest('[data-signin]')) Sync.signIn(); if(e.target.closest('[data-signout]')) Sync.signOut(); });
 $('#dashBtn').addEventListener('click',()=>openProfile());
 $('#lib').addEventListener('click',e=>{
-  const a=e.target.closest('[data-addq]'); if(a) return toggleQueue(a.dataset.addq);
+  const a=e.target.closest('[data-addq]'); if(a) return addToPlan(a,a.dataset.addq);
   const card=e.target.closest('.rc[data-rid]'); if(card) openDrawer(card.dataset.rid,null);
 });
 $('#qstrip').addEventListener('click',e=>{
@@ -686,7 +717,7 @@ $('#drawerBody').addEventListener('click',e=>{
   if(b=q('[data-dswap]')) return openSlotPicker(b.dataset.dswap);
   if(b=q('[data-dlock]')){ const c=parseCtx(b.dataset.dlock); return toggleLock(c.d,c.slot); }
   if(b=q('[data-dremove]')){ const c=parseCtx(b.dataset.dremove); closeDrawer(); return removeMealView(c.d,c.slot); }
-  if(b=q('[data-dq]')) return toggleQueue(b.dataset.dq);
+  if(b=q('[data-dq]')) return addToPlan(b,b.dataset.dq);
   if(b=q('[data-dplan]')) return openPlacePicker(b.dataset.dplan);
   if(b=q('[data-pfp]')) return setPerson(b.dataset.pfp);
   if(b=q('[data-pfday]')){ mDay=+b.dataset.pfday; closeDrawer(); if(isMobile()) setTab('today'); else jumpTo(mDay+'|dinner'); return; }
@@ -713,9 +744,9 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-goto]')) return setTab(b.dataset.goto);
   if(b=q('[data-mp]')) return setPerson(b.dataset.mp);
   if(q('#mProfile')) return openProfile();
-  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); return renderEverything(); }
+  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); renderEverything(); return Motion.enter(document.querySelectorAll('#mLib .m-card'),{max:6}); }
   if(b=q('[data-cu]')){ cuisine=b.dataset.cu; renderFilters(); return renderEverything(); }
-  if(b=q('[data-mq]')) return toggleQueue(b.dataset.mq);
+  if(b=q('[data-mq]')) return addToPlan(b,b.dataset.mq);
   if(b=q('[data-plan]')) return openPlacePicker(b.dataset.plan);
   if(b=q('[data-mswap]')) return openSlotPicker(b.dataset.mswap);
   if(b=q('[data-mlock]')){ const c=parseCtx(b.dataset.mlock); return toggleLock(c.d,c.slot); }
@@ -736,10 +767,18 @@ $('#mApp').addEventListener('click',e=>{
 });
 $('#mApp').addEventListener('change',e=>{ if(onGroceryChange(e)) renderEverything(); });
 $('#mSearch').addEventListener('input',e=>{ query=e.target.value; $('#search').value=query; renderLib(); renderMDiscover(); });
-(()=>{ let sx=0,sy=0,st=0; const el=$('#mToday');
-  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; st=Date.now(); },{passive:true});
+(()=>{ let sx=0,sy=0,st=0,dragging=false,body=null; const el=$('#mToday');
+  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; st=Date.now(); dragging=false; body=el.querySelector('.m-daybody'); },{passive:true});
+  el.addEventListener('touchmove',e=>{
+    if(!body||Motion.reduced()) return; const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(!dragging && Math.abs(dx)>12 && Math.abs(dx)>Math.abs(dy)*1.4) dragging=true;
+    if(dragging){ body.style.transition='none'; body.style.transform=`translateX(${dx*0.85}px)`; body.style.opacity=String(1-Math.min(.35,Math.abs(dx)/900)); }
+  },{passive:true});
   el.addEventListener('touchend',e=>{ const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy;
-    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6 && Date.now()-st<700){ const dir=dx<0?1:-1; mDay=(mDay+dir+7)%7; renderMToday(dir); } },{passive:true});
+    const go=Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.4 && Date.now()-st<900;
+    if(go){ const dir=dx<0?1:-1; mDay=(mDay+dir+7)%7; renderMToday(dir); }
+    else if(body && dragging){ body.style.transition='transform 260ms cubic-bezier(.16,1,.3,1),opacity 200ms'; body.style.transform=''; body.style.opacity=''; }
+    dragging=false; },{passive:true});
 })();
 $('#sheet').addEventListener('click',e=>{
   const q=s=>e.target.closest(s); let b;
