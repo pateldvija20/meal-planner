@@ -534,8 +534,7 @@ function renderMToday(dir){
     <div class="daystrip">${strip}</div>
     <div class="m-daybody ${dir?'m-anim':''}" style="--dx:${(dir||0)*28}px">
       <section class="hero" aria-label="${FULLDAY[mDay]}: ${t.kcal} of ${pp.target} kcal">
-        <div class="blobs" aria-hidden="true"><i></i><i></i><i></i></div>
-        <div class="hero-top"><div><h2 class="hero-day">${FULLDAY[mDay]}</h2><p class="hero-sub">${sub}</p></div>
+                <div class="hero-top"><div><h2 class="hero-day">${FULLDAY[mDay]}</h2><p class="hero-sub">${sub}</p></div>
           <div class="m-arrows"><button data-step="-1" aria-label="Previous day">‹</button><button data-step="1" aria-label="Next day">›</button></div></div>
         <div class="dial-wrap">${dialSVG(dayParts(mDay,pid),pp.target)}
           <div class="dial-center"><span class="num" data-kcal>${t.kcal.toLocaleString()}</span><span class="of">of ${pp.target.toLocaleString()} kcal</span><span class="pct ${over?'over':''}">${pct}%</span></div></div>
@@ -635,8 +634,7 @@ function openProfile(keep){
     ${personal?`<div class="pview-row">Personal view — only ${pp.label}’s portions. <button class="btn-ghost" data-familyview>Family view</button></div>`:''}
     <div class="pf-people" ${personal?'hidden':''}>${PEOPLE.map(p=>`<button class="pf-person ${p.id===pid?'active':''}" style="--pc:${p.hex}" data-pfp="${p.id}" aria-pressed="${p.id===pid}"><b>${p.label}</b><small>${p.note} · ${p.target.toLocaleString()}</small></button>`).join('')}</div>
     <section class="pf-hero" aria-label="This week's average">
-      <div class="blobs" aria-hidden="true"><i></i><i></i></div>
-      <span class="k">${pp.label} · daily average this week</span>
+            <span class="k">${pp.label} · daily average this week</span>
       <span class="num">${A.kcal.toLocaleString()}<small>kcal of ${pp.target.toLocaleString()}</small></span>
       <span class="s">${A.p}g protein a day · goal ${g.p}g</span>
       ${sparkline(days.map(t=>t.kcal),{color:'var(--c-snack)'})}

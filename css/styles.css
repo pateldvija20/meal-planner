@@ -657,3 +657,7 @@ input[type=checkbox]:active{transform:scale(.9)}
 .m-tab.active{color:#4164FF}
 .m-tabs .tab-ind{background:#FFFFFF}
 .m-badge{box-shadow:0 0 0 2px #4164FF}
+/* flat colour blocks only — no gradients or glows */
+.blobs{display:none!important}
+.hero,.pf-hero,.tile.feature{background-image:none}
+.form-actions{background:var(--bg)}
