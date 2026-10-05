@@ -2,15 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#EDEDEC">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#EDEDEC" data-scheme="light">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C0C0D" data-scheme="dark">
+<meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>The Week's Table</title>
 <script>/* apply the saved theme before first paint */try{var t=JSON.parse(localStorage.getItem('mp_theme'));if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..600&family=Schibsted+Grotesk:wght@700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -37,7 +39,7 @@
     <h2>The week</h2><span class="hint" id="weekLabel"></span><span class="rule"></span>
     <button class="ghost-btn solid" data-gen>✦ Generate</button>
     <button id="grocery" class="ghost-btn">Grocery list</button>
-    <button id="reset" class="ghost-btn">Starter plan</button>
+    <button id="reset" class="ghost-btn">Reset to starter plan</button>
   </div>
   <div class="cal-scroll"><div class="cal" id="cal"></div></div>
 
@@ -51,7 +53,7 @@
   <div class="toolbar">
     <div class="search">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="search" type="text" placeholder="Search recipes, ingredients, tags…" autocomplete="off">
+      <input id="search" type="text" enterkeyhint="search" placeholder="Search recipes, ingredients, tags…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     </div>
     <div class="filters" id="filters"></div>
     <button id="newRecipe" class="new-btn">+ New recipe</button>
@@ -77,8 +79,8 @@
   <main class="m-main">
     <section class="m-panel" data-panel="today" id="mToday" hidden></section>
     <section class="m-panel" data-panel="discover" hidden>
-      <div class="m-title"><h2 class="m-h2">Discover</h2><span class="hint" id="mLibCount"></span></div>
-      <div class="search m-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="mSearch" type="text" enterkeyhint="search" placeholder="Search recipes, ingredients, tags…" autocomplete="off"></div>
+      <div class="m-title"><h2 class="m-h2">Recipes</h2><span class="hint" id="mLibCount"></span></div>
+      <div class="search m-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="mSearch" type="text" enterkeyhint="search" placeholder="Search recipes, ingredients, tags…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="filters m-chips" id="mFilters"></div>
       <div class="filters m-chips cuisines" id="mCuisines"></div>
       <div class="bento" id="mLib"></div>
@@ -114,6 +116,8 @@
 <script src="js/sync.js"></script>
 <script src="js/motion.js"></script>
 <script src="js/look.js"></script>
+<script>/* dev only: on localhost, ?data=demo|worst|empty|one|huge loads the data-stress toggle (js/dev-data.js); never active on the live site */
+(function(){var h=location.hostname;if(new URLSearchParams(location.search).get('data')&&/^(localhost|127\.0\.0\.1|\[::1\]|.+\.local)$/.test(h))document.write('<script src="js/dev-data.js"><\/script>');})();</script>
 <script src="js/ui.js"></script>
 <script src="js/trackers.js"></script>
 </body>

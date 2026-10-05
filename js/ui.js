@@ -22,19 +22,40 @@ const person=()=>personById(selPerson);
 function nameParts(r){ const p=String(r.name).split(' + '); return {main:p[0], sides:p.slice(1)}; }
 function sidesHTML(r){ const s=nameParts(r).sides; return s.length?`<span class="sides">${s.map(x=>`<span class="side">+ ${esc(x)}</span>`).join('')}</span>`:''; }
 const defSlot=r=>r.cat==='breakfast'?'breakfast':r.cat==='snack'?'snack':'dinner';
+// after a swap / placement / trade, only the row that changed eases in (state indication; the toast says what, this shows where)
+function enterSlot(...keys){
+  const els=keys.flatMap(k=>[...document.querySelectorAll(`[data-key="${k}"],.chip[data-ctx="${k}"]`)]).filter(e=>e.offsetParent);
+  Motion.enter(els,{y:6,dur:220,stagger:0,max:4});
+}
 const isLocked=(d,slot)=>slot==='snack'?!!state.snack.locked:!!state.plan[d].locks[slot];
 const shortName=r=>r.name.split('(')[0].trim();
-let toastT;
+let toastT=0, toastLeft=0, toastAt=0, pendingUndo=null;
+function hideToast(){ clearTimeout(toastT); toastT=0; pendingUndo=null; $('#toast').classList.remove('show','actionable'); }
+function armToast(ms){ clearTimeout(toastT); toastLeft=ms; toastAt=Date.now(); toastT=setTimeout(hideToast,ms); }
+// the clock stops while nobody can see or reach the toast (tab hidden, finger/pointer on it, focus inside it)
+function pauseToast(){ if(!toastT) return; clearTimeout(toastT); toastT=0; toastLeft=Math.max(1200,toastLeft-(Date.now()-toastAt)); }
+function resumeToast(){ if(toastT||!$('#toast').classList.contains('show')) return; toastAt=Date.now(); toastT=setTimeout(hideToast,toastLeft); }
 function toast(msg,opts){
-  const t=$('#toast'); clearTimeout(toastT);
+  const t=$('#toast');
   if(opts&&opts.action){
     t.innerHTML=`<span>${esc(msg)}</span><button class="toast-act" type="button">${esc(opts.action)}</button>`;
     t.classList.add('actionable');
-    t.querySelector('.toast-act').onclick=()=>{ t.classList.remove('show','actionable'); clearTimeout(toastT); opts.onAction&&opts.onAction(); };
-  } else { t.textContent=msg; t.classList.remove('actionable'); }
+    pendingUndo=opts.onAction||null;
+    t.querySelector('.toast-act').onclick=()=>{ const fn=pendingUndo; hideToast(); fn&&fn(); };
+  } else { t.textContent=msg; t.classList.remove('actionable'); pendingUndo=null; }
   t.classList.add('show');
-  toastT=setTimeout(()=>t.classList.remove('show','actionable'), opts&&opts.action ? 5000 : 1900);
+  armToast(opts&&opts.action ? 6000 : 1900);
 }
+document.addEventListener('visibilitychange',()=>document.hidden?pauseToast():resumeToast());
+{ const t=document.getElementById('toast');
+  ['pointerenter','focusin'].forEach(ev=>t.addEventListener(ev,pauseToast));
+  ['pointerleave','focusout'].forEach(ev=>t.addEventListener(ev,resumeToast)); }
+// ⌘Z / Ctrl+Z takes back the last undoable action while its toast is up (not while typing)
+document.addEventListener('keydown',e=>{
+  if(!(e.metaKey||e.ctrlKey) || e.shiftKey || e.key.toLowerCase()!=='z' || !pendingUndo) return;
+  const el=e.target; if(el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+  e.preventDefault(); const fn=pendingUndo; hideToast(); fn();
+});
 function fmtQty(q,u){
   if(q==null) return '';
   if(units==='us'){
@@ -66,6 +87,11 @@ const ICON={
 
 /* ================= mutations ================= */
 function commit(){ saveState(); renderEverything(); }
+// forgiveness over confirmation: do it now, offer to take it back (whole-state snapshot, 6s)
+const snapshot=()=>JSON.stringify(state);
+function undoable(msg,snap,done){
+  toast(msg,{action:'Undo',onAction:()=>{ replaceState(JSON.parse(snap)); saveState(); renderEverything(); toast(done||'Undone'); }});
+}
 const parseCtx=k=>{ const [d,slot]=k.split('|'); return {d:+d,slot}; };
 /* ================= swapping ================= */
 // alternatives with similar calories & protein that aren't already planned this week
@@ -94,7 +120,7 @@ function tradeMeals(d1,d2,slot){
   state.changes.unshift({id:'chg-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:Date.now(), kind:'trade', d:d1, d2, slot, from:ra||null, to:rb||null, by});
   state.changes=state.changes.slice(0,40);
   const warn=[[ra,d2],[rb,d1]].some(([id,d])=>id && slot==='dinner' && needsLeftover(d) && !rec(id).leftover);
-  commit();
+  commit(); enterSlot(d1+'|'+slot,d2+'|'+slot);
   toast(rb ? `${DAYS[d1]} ⇄ ${DAYS[d2]} ${slot}${warn?'. One dish doesn’t reheat well for tomorrow’s lunch.':''}` : `Moved to ${DAYS[d2]} ${slot}`);
   return true;
 }
@@ -123,29 +149,31 @@ function setMealView(d,slot,rid,pid=selPerson){
   const r=rec(rid); if(!r) return false;
   if(slot==='snack'){
     if(r.cat!=='snack'){ toast('Pick a snack-box recipe for the weekly snack'); return false; }
-    logChange(null,'snack',state.snack.rid,rid); state.snack.rid=rid; commit(); toast(`${shortName(r)} is this week’s snack box`); return true;
+    logChange(null,'snack',state.snack.rid,rid); state.snack.rid=rid; commit(); enterSlot(d+'|snack'); toast(`${shortName(r)} is this week’s snack box`); return true;
   }
   if(r.cat==='snack'){ toast('That’s a snack-box recipe. It goes in the weekly snack.'); return false; }
   if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){
     if(!r.farali){ toast(`${personById(pid).label}’s Thursday needs a farali recipe`); return false; }
-    logChange(d,slot,state.farali[slot],rid,pid); state.farali[slot]=rid; commit(); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
+    logChange(d,slot,state.farali[slot],rid,pid); state.farali[slot]=rid; commit(); enterSlot(d+'|'+slot); toast(`Farali ${slot} set for ${personById(pid).label}`); return true;
   }
   if(slot==='breakfast' && r.cat!=='breakfast'){ toast('That’s a lunch or dinner recipe. Pick a breakfast.'); return false; }
   if(slot!=='breakfast' && r.cat==='breakfast'){ toast('That’s a breakfast. Pick a lunch or dinner recipe.'); return false; }
   const day=state.plan[d];
   logChange(d,slot,currentRid(d,slot)||mealFor(d,slot)&&mealFor(d,slot).rid,rid);
   if(slot==='lunch' && LEFTOVER_DAYS.includes(d)) day.lunchFresh=true;
-  day[slot]=rid; armed=null; commit();
+  day[slot]=rid; armed=null; commit(); enterSlot(d+'|'+slot);
   toast(`${shortName(r)} → ${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}`);
   return true;
 }
 function removeMealView(d,slot,pid=selPerson){
-  if(slot==='snack'){ logChange(null,'snack',state.snack.rid,null); state.snack.rid=null; return commit(); }
-  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ logChange(d,slot,state.farali[slot],null,pid); state.farali[slot]=null; return commit(); }
+  const snap=snapshot(), m0=slot==='snack'?{rid:state.snack.rid}:mealFor(d,slot,pid), n0=m0&&rec(m0.rid)?nameParts(rec(m0.rid)).main.split('(')[0].trim():'meal';
+  const done=()=>undoable(`Removed ${n0}`,snap,`${n0} is back`);
+  if(slot==='snack'){ logChange(null,'snack',state.snack.rid,null); state.snack.rid=null; commit(); return done(); }
+  if((slot==='lunch'||slot==='dinner') && isFarali(pid,d)){ logChange(d,slot,state.farali[slot],null,pid); state.farali[slot]=null; commit(); return done(); }
   const day=state.plan[d];
   { const m=mealFor(d,slot); if(m) logChange(d,slot,m.rid,null); }
-  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return toast('Leftovers off. Add a fresh lunch.'); }
-  day[slot]=null; delete day.locks[slot]; commit();
+  if(slot==='lunch' && isLeftoverLunch(d)){ day.lunchFresh=true; day.lunch=null; commit(); return undoable('Leftovers off. Add a fresh lunch.',snap,'Leftovers are back'); }
+  day[slot]=null; delete day.locks[slot]; commit(); done();
 }
 function useLeftovers(d){ const day=state.plan[d]; day.lunchFresh=false; day.lunch=null; delete day.locks.lunch; commit(); toast(`${DAYS[d]} lunch is ${d===0?'Sunday':DAYS[d-1]}’s dinner again`); }
 function toggleLock(d,slot){
@@ -172,12 +200,12 @@ function runGenerate(mode){
   else sum=generateWeek({from: mode==='rest' ? TODAY_IDX+1 : 0});
   TODAY_IDX=todayIndex(); if(mode==='next') mDay=0;
   commit();
-  requestAnimationFrame(()=>Motion.enter(document.querySelectorAll(isMobile()?'#mToday .m-meal':'#cal .chip:not(.fixed)'),{stagger:isMobile()?45:12,max:isMobile()?8:40}));
+  requestAnimationFrame(()=>Motion.enter(document.querySelectorAll(isMobile()?'#mToday .meal-sec':'#cal .chip:not(.fixed)'),{stagger:isMobile()?45:12,max:isMobile()?8:40}));
   toast(`${mode==='next'?'Next week planned':'Plan refreshed'} · ${sum.placed} meals${sum.fromQueue?` · ${sum.fromQueue} from your queue`:''}${sum.chicken?` · ${sum.chicken} chicken night${sum.chicken>1?'s':''}`:''}`);
 }
 function applyStatus(d,slot,pids,v){ pids.forEach(pid=>setStatus(d,slot,pid,v)); commit();
   requestAnimationFrame(()=>Motion.pop(document.querySelector(`[data-mstatus="${d}|${slot}"]`))); toast(`${DAYS[d]} ${SLOT_LABEL[slot].toLowerCase()}: ${statusLabel(v).toLowerCase()}${pids.length>1?' for everyone':''}`); }
-function resetPlan(){ const s=seedState(); s.queue=state.queue; s.custom=state.custom; s.grocery={}; state=normalize(s); commit(); toast('Week reset to the starter plan'); }
+function resetPlan(){ const snap=snapshot(), s=seedState(); s.queue=state.queue; s.custom=state.custom; s.grocery={}; state=normalize(s); commit(); undoable('Week reset to the starter plan',snap,'Week restored'); }
 
 /* ================= desktop ================= */
 function renderSeg(){
@@ -222,9 +250,9 @@ function renderCal(){
   h+=`<div class="row-lbl total-lbl">Total</div>`;
   DAYS.forEach((_,d)=>{
     const t=dayTotals(d,pid), pct=Math.min(100,Math.round(t.kcal/pp.target*100)), over=pp.note==='losing'&&t.kcal>pp.target*1.05;
-    h+=`<div class="total"><div class="kv ${over?'over':''}"><span class="cal-n">${t.kcal}</span><span style="color:var(--ink-soft)">/${pp.target}</span></div>
+    h+=`<div class="total"><div class="kv ${over?'over':''}"><span class="cal-n">${t.kcal}</span><span style="color:var(--ink-3)">/${pp.target}</span></div>
       <div class="bar ${over?'over':''}" style="--sel:${pp.hex}"><span style="width:${pct}%"></span></div>
-      <div class="kv"><span class="p">${t.p}g P</span><span style="color:var(--ink-soft)">${Math.round(t.kcal/pp.target*100)}%</span></div></div>`;
+      <div class="kv"><span class="p">${t.p}g P</span><span style="color:var(--ink-3)">${Math.round(t.kcal/pp.target*100)}%</span></div></div>`;
   });
   $('#cal').innerHTML=h;
 }
@@ -382,15 +410,15 @@ function openAddForm(){
     <div class="d-ctx">New recipe</div><h2 class="d-name">Build a recipe</h2>
     <p class="form-note">Describe ONE standard serving. Each person's portion (and the family batch) is worked out from their calorie budget.</p>
     <div class="d-sec"><h3>Basics</h3><div class="fm-grid">
-      <label class="wide">Name<input type="text" id="f_name" placeholder="e.g. Tofu bhurji toast"></label>
+      <label class="wide">Name<input type="text" id="f_name" enterkeyhint="next" autocapitalize="sentences" placeholder="e.g. Tofu bhurji toast"></label>
       <label>Meal<select id="f_cat"><option value="breakfast">breakfast</option><option value="main" selected>lunch & dinner</option></select></label>
       <label>Cuisine<input type="text" id="f_cuisine" placeholder="e.g. Gujarati"></label>
       <label class="wide">Protein note<input type="text" id="f_upgrade" placeholder="what makes it protein-rich"></label>
       <label class="wide">One serving looks like<input type="text" id="f_serve" placeholder="e.g. 1 bowl · 150 g tofu · 2 roti"></label>
-      <label>Calories<input type="number" id="f_kcal" min="0" placeholder="kcal"></label>
-      <label>Protein <small>g</small><input type="number" id="f_p" min="0" placeholder="g"></label>
-      <label>Carbs <small>g</small><input type="number" id="f_c" min="0" placeholder="g"></label>
-      <label>Fat <small>g</small><input type="number" id="f_f" min="0" placeholder="g"></label>
+      <label>Calories<input type="number" id="f_kcal" min="0" inputmode="decimal" enterkeyhint="next" placeholder="kcal"></label>
+      <label>Protein <small>g</small><input type="number" id="f_p" min="0" inputmode="decimal" enterkeyhint="next" placeholder="g"></label>
+      <label>Carbs <small>g</small><input type="number" id="f_c" min="0" inputmode="decimal" enterkeyhint="next" placeholder="g"></label>
+      <label>Fat <small>g</small><input type="number" id="f_f" min="0" inputmode="decimal" enterkeyhint="done" placeholder="g"></label>
     </div>
     <div class="chk-row"><label class="chk"><input type="checkbox" id="f_left" checked> Reheats well (OK as next-day lunch)</label><label class="chk"><input type="checkbox" id="f_farali"> Farali</label><label class="chk"><input type="checkbox" id="f_nosugar"> No added sugar</label></div>
     <div class="fm-fb" id="f_fb"></div></div>
@@ -409,9 +437,15 @@ function openAddForm(){
   $('#f_save').addEventListener('click',saveForm);
   openShell();
 }
+function fieldError(id,msg){
+  const el=$('#'+id); el.setAttribute('aria-invalid','true'); el.focus();
+  let e=el.parentElement.querySelector('.f-err'); if(!e){ e=document.createElement('small'); e.className='f-err'; e.setAttribute('role','alert'); el.after(e); }
+  e.textContent=msg;
+  el.addEventListener('input',()=>{ el.removeAttribute('aria-invalid'); e.remove(); },{once:true});
+}
 function saveForm(){
-  const name=$('#f_name').value.trim(); if(!name){ toast('Add a recipe name'); $('#f_name').focus(); return; }
-  const kcal=+$('#f_kcal').value||0; if(!kcal){ toast('Add calories per serving'); $('#f_kcal').focus(); return; }
+  const name=$('#f_name').value.trim(); if(!name) return fieldError('f_name','Give the recipe a name');
+  const kcal=+$('#f_kcal').value||0; if(!kcal) return fieldError('f_kcal','Add calories per serving');
   const p=+$('#f_p').value||0, cv=$('#f_c').value, fv=$('#f_f').value;
   let c=cv===''?null:+cv, f=fv===''?null:+fv; const rem=Math.max(0,kcal-p*4);
   if(c==null&&f==null){ f=Math.round(rem*.3/9); c=Math.round((rem-f*9)/4); } else if(c==null) c=Math.round(Math.max(0,rem-f*9)/4); else if(f==null) f=Math.round(Math.max(0,rem-c*4)/9);
@@ -424,15 +458,17 @@ function saveForm(){
   closeDrawer(); renderFilters(); commit(); toast('Recipe added to the library');
 }
 function removeCustom(id){
+  const snap=snapshot();
   state.custom=state.custom.filter(c=>c.id!==id);
   DAYS.forEach((_,d)=>MEAL_SLOTS.forEach(s=>{ if(state.plan[d][s]===id) state.plan[d][s]=null; }));
   ['lunch','dinner'].forEach(s=>{ if(state.farali[s]===id) state.farali[s]=null; });
   if(state.prevSunDinner===id) state.prevSunDinner=null;
   state.queue=state.queue.filter(x=>x!==id);
-  mountCustoms(); closeDrawer(); commit(); toast('Recipe deleted');
+  mountCustoms(); closeDrawer(); commit(); undoable('Recipe deleted',snap,'Recipe restored');
 }
 
 /* ================= grocery ================= */
+let gFresh=null;                                    // the row that was just opened (its details ease in once)
 let gStore = store.get('mp_gstore') || 'all';      // which store tab this phone is looking at
 const AISLES=['Proteins & dairy','Produce','Grains & legumes','Nuts, seeds & spreads','Pantry & supplements','Other'];
 function groceryModel(){
@@ -450,8 +486,9 @@ function groceryHTML(scope){
     let extra='';
     if(open){
       const cells=it.key&&FOODS[it.key]?cellsForIngredient(it.key):[];
-      extra=`<div class="gc-loc">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' '+SLOT_LABEL[c.slot].toLowerCase()}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink and shake'):'From a custom recipe'}</div>
-        <div class="gc-move"><span>Buy at</span>${state.stores.map(st=>`<button data-setstore="${esc(it.id)}|${st.id}" class="${it.storeId===st.id?'on':''}">${esc(st.name)}</button>`).join('')}</div>`;
+      const fx=gFresh===it.id?' gc-in':'';
+      extra=`<div class="gc-loc${fx}">${it.key&&FOODS[it.key]?(cells.length?'Used in '+cells.map(c=>`<button data-jump="${c.d}|${c.slot}">${c.weekly?'Snack box':DAYS[c.d]+' '+SLOT_LABEL[c.slot].toLowerCase()}${c.farali?' (Aum)':''}${c.leftover?' ↩':''}</button>`).join(''):'Daily drink and shake'):'From a custom recipe'}</div>
+        <div class="gc-move${fx}"><span>Buy at</span>${state.stores.map(st=>`<button data-setstore="${esc(it.id)}|${st.id}" class="${it.storeId===st.id?'on':''}">${esc(st.name)}</button>`).join('')}</div>`;
     }
     return `<div class="gc-item ${it.done?'done':''} ${open?'active':''}"><span class="gc-ic" aria-hidden="true">${FOOD_EMOJI[it.key]||AISLE_EMOJI[it.cat]||'🛒'}</span><button type="button" class="gc-txt" data-ing="${esc(it.id)}" aria-expanded="${open}"><span class="gc-name">${esc(it.n)}</span><span class="gc-q">${it.qty||'as listed'}</span></button><input type="checkbox" data-g="${esc(it.id)}" ${it.done?'checked':''} aria-label="Tick off ${esc(it.n)}">${extra}</div>`;
   };
@@ -488,8 +525,8 @@ function onGroceryClick(e){
   const q=s=>e.target.closest(s); let b;
   if(b=q('[data-gstore]')){ gStore=b.dataset.gstore; store.set('mp_gstore',gStore); mOpenIng=null; return true; }
   if(b=q('[data-setstore]')){ const [id,sid]=b.dataset.setstore.split('|'); state.storeMap[id]=sid; saveState(); toast(`Moved to ${storeById(sid).name} for everyone`); return true; }
-  if(b=q('[data-ing]')){ mOpenIng=mOpenIng===b.dataset.ing?null:b.dataset.ing; return true; }
-  if(q('[data-gclear]')){ state.grocery={}; saveState(); return true; }
+  if(b=q('[data-ing]')){ const id=b.dataset.ing; mOpenIng=mOpenIng===id?null:id; gFresh=mOpenIng; if(gFresh) setTimeout(()=>{ if(gFresh===id) gFresh=null; },400); return true; }
+  if(q('[data-gclear]')){ const snap=snapshot(); if(!Object.keys(state.grocery||{}).length) return toast('Nothing ticked yet'),false; state.grocery={}; saveState(); undoable('Ticks cleared',snap,'Ticks restored'); return true; }
   if(q('[data-gcopy]')){ copyGroceryText(); return false; }
   if(q('[data-gmanage]')){ openStoresSheet(); return false; }
   return false;
@@ -500,7 +537,7 @@ function onGroceryChange(e){
   if(cb.checked) state.grocery[cb.dataset.g]=1; else delete state.grocery[cb.dataset.g];
   const row=cb.closest('.gc-item'); if(row) row.classList.toggle('done',cb.checked);
   saveState();
-  clearTimeout(gTimer); gTimer=setTimeout(renderEverything, Motion.reduced()?0:420);   // let the check + strike-through play first
+  clearTimeout(gTimer); gTimer=setTimeout(renderEverything, Motion.reduced()?0:260);   // let the check + strike-through play first
   return false;
 }
 /* manage stores (sheet) */
@@ -510,7 +547,7 @@ function openStoresSheet(){
   openSheet('Grocery','Your stores',`
     <p class="m-sub">Rename, add or remove stores. Removing a store moves its items to their default store, or to “Unassigned”.</p>
     <div class="store-list">${state.stores.map(st=>`<div class="store-row"><input type="text" value="${esc(st.name)}" data-rename="${st.id}" aria-label="Store name"><small>${items.filter(i=>i.storeId===st.id).length} items</small><button class="m-ic" data-delstore="${st.id}" aria-label="Remove ${esc(st.name)}">×</button></div>`).join('')}</div>
-    <div class="store-add"><input type="text" id="newStore" placeholder="Add a store — e.g. Trader Joe’s" autocomplete="off"><button class="btn-solid" data-addstore>Add</button></div>`);
+    <div class="store-add"><input type="text" id="newStore" enterkeyhint="done" autocapitalize="words" placeholder="Add a store — e.g. Trader Joe’s" autocomplete="off"><button class="btn-solid" data-addstore>Add</button></div>`);
 }
 $('#sheet').addEventListener('click',e=>{
   if(!sheetState||sheetState.t!=='stores') return;
@@ -529,25 +566,30 @@ function jumpTo(key){
   if(isMobile()){ mDay=d; closeDrawer(); setTab('today'); return; }
   closeDrawer();
   const cell=document.querySelector(`[data-drop="${key}"]`); if(!cell) return;
-  cell.scrollIntoView({behavior:'smooth',block:'center',inline:'center'});
+  cell.scrollIntoView({behavior:Motion.reduced()?'auto':'smooth',block:'center',inline:'center'});
   cell.classList.add('hl'); setTimeout(()=>cell.classList.remove('hl'),2600);
 }
 const isMobile=()=>window.matchMedia('(max-width:760px)').matches;
 
 /* ================= mobile ================= */
-const TABS=[['today','Today'],['discover','Discover'],['grocery','Grocery'],['queue','Queue']];
+const TABS=[['today','Today'],['discover','Recipes'],['grocery','Grocery'],['queue','Queue']];
 function renderMobile(){
   const pp=person();
   $('#mProfile').innerHTML=`<span style="--pc:${pp.hex}">${pp.label[0]}</span><i class="sync-dot s-${Sync.status}"></i>`;
-  $('#mTabs').innerHTML=TABS.map(([id,l])=>`<button class="m-tab ${id===mTab?'active':''}" data-tab="${id}" ${id===mTab?'aria-current="page"':''}>${ICON[id]}${l}${id==='queue'&&state.queue.length?`<span class="m-badge">${state.queue.length}</span>`:''}</button>`).join('');
-  Motion.slide('tabs',$('#mTabs'),'tab-ind',TABS.findIndex(x=>x[0]===mTab));
+  // Two layers: the real buttons (light labels on the dark bar) and an aria-hidden copy (dark labels on a white pill) that is
+  // clipped to the active tab. Animating the clip moves the pill and flips the label colour in perfect sync.
+  const tab=(id,l,lit)=>{ const badge=id==='queue'&&state.queue.length?`<span class="m-badge">${state.queue.length}</span>`:'';
+    return lit ? `<span class="m-tab">${ICON[id]}${l}${badge}</span>`
+               : `<button class="m-tab ${id===mTab?'active':''}" data-tab="${id}" ${id===mTab?'aria-current="page"':''}>${ICON[id]}${l}${badge}</button>`; };
+  $('#mTabs').innerHTML=TABS.map(([id,l])=>tab(id,l)).join('')+`<div class="tabs-lit" aria-hidden="true">${TABS.map(([id,l])=>tab(id,l,true)).join('')}</div>`;
+  Motion.clip('tabs',$('#mTabs .tabs-lit'),TABS.findIndex(x=>x[0]===mTab));
   document.querySelectorAll('.m-panel').forEach(p=>p.hidden=p.dataset.panel!==mTab);
   ({discover:renderMDiscover,today:renderMToday,grocery:renderMGrocery,queue:renderMQueue})[mTab]();
 }
 function setTab(t){
   if(t===mTab){ window.scrollTo({top:0,behavior:Motion.reduced()?'auto':'smooth'}); return; }
   mTab=t; store.set('mp_tab',t);
-  Motion.transition(()=>{ renderMobile(); window.scrollTo(0,0); });
+  Motion.transition(()=>{ renderMobile(); window.scrollTo(0,0); },'tab');
 }
 function renderMDiscover(){
   $('#mFilters').innerHTML=LIB_FILTERS.map(([c,l])=>`<button data-mf="${c}" class="${c===filter?'active':''}">${l}</button>`).join('');
@@ -562,8 +604,9 @@ function dayParts(d,pid){
     const kcal = st==='skip' ? 0 : st ? outEstimate(d,s.id,pid,st) : portion(m.rid,pid,s.id,d).kcal;
     return {slot:s.id,kcal,color:SLOT_COLOR[s.id],emoji:emojiOf(rec(m.rid))}; }).filter(Boolean);
 }
-let lastSumKcal=null, lastSumKey=null;
-function renderMToday(dir){
+let dialIntro=false;
+let swipeTok=0;   // any render invalidates a swipe that is still settling
+function renderMToday(dir){ swipeTok++;
   const pid=selPerson, pp=person(), t=dayTotals(mDay,pid), g=macroGuide(pid);
   const pct=Math.round(t.kcal/pp.target*100), over=t.kcal>pp.target*1.05;
   const strip=DAYS.map((dn,d)=>{
@@ -608,24 +651,38 @@ function renderMToday(dir){
       </section>
       ${rows}
     </div>
-    <div class="m-foot"><button class="btn-solid" data-gen>✦ Generate</button><button class="btn-ghost" id="mReset">Starter plan</button></div>`;
+    <div class="m-foot"><button class="btn-solid" data-gen>✦ Generate</button><button class="btn-ghost" id="mReset">Reset to starter plan</button></div>`;
   Motion.slide('days',$('#mToday .daystrip'),'day-ind',mDay);
-  const key=pid+'|'+mDay;
-  if(key!==lastSumKey){ Motion.countUp($('#mToday [data-kcal]'),t.kcal,lastSumKcal); Motion.drawDial($('#mToday .dial')); }
-  lastSumKcal=t.kcal; lastSumKey=key;
+  if(!dialIntro){ dialIntro=true; Motion.countUp($('#mToday [data-kcal]'),t.kcal,0); Motion.drawDial($('#mToday .dial')); }   // rare tier: the first time Today opens in a session
 }
 function renderMGrocery(){ $('#mGrocery').innerHTML=`<div class="m-title"><h2 class="m-h2">Grocery</h2></div>${groceryHTML('m')}`; }
+let lastQEmpty=false;
 function renderMQueue(){
+  const emptyEnter=!state.queue.length && !lastQEmpty; lastQEmpty=!state.queue.length;
   const rows=state.queue.map((rid,i)=>{ const r=rec(rid); if(!r) return ''; const slot=defSlot(r), pt=portion(rid,selPerson,slot,null);
     return `<div class="m-item" style="margin-bottom:8px"><span class="meal-ic" style="--bk:${CAT_COLOR[r.cat]}" aria-hidden="true">${emojiOf(r)}</span><button class="m-hit" data-open="${rid}"><span class="nm">${esc(nameParts(r).main)}</span>${sidesHTML(r)}<span class="meta">${r.farali?'Farali':CAT_LABEL[r.cat].replace(/^./,c=>c.toUpperCase())} · <b>${pt.kcal}</b> kcal · <b class="p">${pt.p}g P</b></span></button><button class="m-btn sm ghost" data-plan="${rid}">Place</button><button class="m-ic" data-mdeq="${i}" aria-label="Remove ${esc(r.name)} from queue">×</button></div>`; }).join('');
   $('#mQueue').innerHTML=`<div class="m-title"><h2 class="m-h2">Queue</h2><span class="hint">${state.queue.length} staged</span></div>
     <p class="m-sub">Recipes you’ve added to the plan. Generate places them first, then fills the rest of the week.</p>
     <button class="btn-solid wide gen-big" data-gen>✦ Generate plan</button>
-    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty"><p>Nothing queued. Tap <b>+</b> on any recipe in Discover.</p><button class="m-btn sm" data-goto="discover">Discover recipes</button></div>`}`;
+    ${state.queue.length?`<div style="margin-top:14px">${rows}</div>`:`<div class="m-qempty${emptyEnter?' is-enter':''}"><p>Nothing queued. Tap <b>+</b> on any recipe.</p><button class="m-btn sm" data-goto="discover">Browse recipes</button></div>`}`;
+}
+// The sheet is rebuilt on every tap, which would hard-cut the highlight. Re-apply the previous selected state, flush
+// styles, then flip to the new one so the existing colour transition (--t-fast, ease) actually runs.
+function setSheetHTML(box,html,carry){
+  const SEL='.opt,.gen-opt', id=el=>[...el.attributes].filter(a=>a.name.startsWith('data-')).map(a=>a.name+'='+a.value).join('&');
+  const was=carry?new Map([...box.querySelectorAll(SEL)].map(el=>[id(el),el.classList.contains('active')||el.classList.contains('on')])):null;
+  box.innerHTML=html;
+  if(!was) return;
+  const flips=[];
+  box.querySelectorAll(SEL).forEach(el=>{
+    const cls=el.classList.contains('gen-opt')?'on':'active', now=el.classList.contains(cls), prev=was.get(id(el));
+    if(prev!==undefined && prev!==now){ el.classList.toggle(cls,prev); flips.push([el,cls,now]); }
+  });
+  if(flips.length){ box.getBoundingClientRect(); flips.forEach(([el,cls,now])=>el.classList.toggle(cls,now)); }
 }
 function openSheet(ctx,title,html){
   const s=$('#sheet'), wasOpen=s.classList.contains('open');
-  $('#sheetCtx').textContent=ctx; $('#sheetTitle').textContent=title; $('#sheetBody').innerHTML=html;
+  $('#sheetCtx').textContent=ctx; $('#sheetTitle').textContent=title; setSheetHTML($('#sheetBody'),html,wasOpen);
   if(!wasOpen) $('#sheetBody').scrollTop=0;
   s.classList.add('open'); s.setAttribute('aria-hidden','false'); $('#sheetScrim').classList.add('show');
 }
@@ -667,7 +724,7 @@ function openSlotPicker(key){
     ${sug.length?`<div class="sh-lbl">Suggested <small>similar calories &amp; protein, not already this week</small></div>${sug.map(x=>pickRow(x, r0?` · <b>${sign(x.dk)} kcal · ${sign(x.dp)}g P</b>`:'')).join('')}`:''}
     ${trades?`<div class="sh-lbl">Trade within the week</div>${trades}`:''}
     <div class="sh-lbl">Browse all</div>
-    <div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off"></div><div id="shList"></div>`);
+    <div class="search m-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="shSearch" type="text" enterkeyhint="search" placeholder="Search recipes…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div><div id="shList"></div>`);
   renderSlotList();
 }
 function renderSlotList(){
@@ -806,7 +863,7 @@ $('#cal').addEventListener('click',e=>{
 });
 let dragRid=null;
 let dragCtx=null;
-document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; dragRid=src.dataset.rid; dragCtx=src.dataset.ctx||null; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
+document.addEventListener('dragstart',e=>{ const src=e.target.closest('[data-rid]'); if(!src) return; if(isMobile()){ e.preventDefault(); return; } /* phones: no long-press lift on recipe tiles */ dragRid=src.dataset.rid; dragCtx=src.dataset.ctx||null; e.dataTransfer.setData('text/plain',dragRid); e.dataTransfer.effectAllowed='copy'; });
 document.addEventListener('dragover',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); e.dataTransfer.dropEffect='copy'; cell.classList.add('drop-hover'); });
 document.addEventListener('dragleave',e=>{ const cell=e.target.closest('[data-drop]'); if(cell) cell.classList.remove('drop-hover'); });
 document.addEventListener('drop',e=>{ const cell=e.target.closest('[data-drop]'); if(!cell) return; e.preventDefault(); cell.classList.remove('drop-hover');
@@ -848,7 +905,7 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-goto]')) return setTab(b.dataset.goto);
   if(b=q('[data-mp]')) return setPerson(b.dataset.mp);
   if(q('#mProfile')) return openProfile();
-  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); renderEverything(); return Motion.enter(document.querySelectorAll('#mLib .m-card'),{max:6}); }
+  if(b=q('[data-mf]')){ filter=b.dataset.mf; renderFilters(); renderEverything(); return; }
   if(b=q('[data-cu]')){ cuisine=b.dataset.cu; renderFilters(); return renderEverything(); }
   if(b=q('[data-mq]')) return addToPlan(b,b.dataset.mq);
   if(b=q('[data-addq]')) return addToPlan(b,b.dataset.addq);
@@ -862,10 +919,7 @@ $('#mApp').addEventListener('click',e=>{
   if(b=q('[data-open]')) return openDrawer(b.dataset.open,b.dataset.ctx||null);
   if(b=q('[data-day]')){ const nd=+b.dataset.day; if(nd===mDay) return; const dir=nd>mDay?1:-1; mDay=nd; return renderMToday(dir); }
   if(b=q('[data-step]')){ const st=+b.dataset.step; mDay=(mDay+st+7)%7; return renderMToday(st); }
-  if(b=q('#mReset')){
-    if(!b.dataset.armed){ b.dataset.armed='1'; b.textContent='Tap again to reset the week'; setTimeout(()=>{ if(b.isConnected){ delete b.dataset.armed; b.textContent='↺ Reset week to plan'; } },3000); return; }
-    return resetPlan();
-  }
+  if(q('#mReset')) return resetPlan();
   if(b=q('[data-jump]')) return jumpTo(b.dataset.jump);
   if(b=q('[data-mdeq]')){ state.queue.splice(+b.dataset.mdeq,1); return commit(); }
   if(q('#mNewRecipe')) return openAddForm();
@@ -873,18 +927,46 @@ $('#mApp').addEventListener('click',e=>{
 });
 $('#mApp').addEventListener('change',e=>{ if(onGroceryChange(e)) renderEverything(); });
 $('#mSearch').addEventListener('input',e=>{ query=e.target.value; $('#search').value=query; renderLib(); renderMDiscover(); });
-(()=>{ let sx=0,sy=0,st=0,dragging=false,body=null; const el=$('#mToday');
-  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; st=Date.now(); dragging=false; body=el.querySelector('.m-daybody'); },{passive:true});
-  el.addEventListener('touchmove',e=>{
-    if(!body||Motion.reduced()) return; const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy;
-    if(!dragging && Math.abs(dx)>12 && Math.abs(dx)>Math.abs(dy)*1.4) dragging=true;
-    if(dragging){ body.style.transition='none'; body.style.transform=`translateX(${dx*0.85}px)`; body.style.opacity=String(1-Math.min(.35,Math.abs(dx)/900)); }
+(()=>{ let sx=0,sy=0,dragging=false,body=null,offset=0,base=0,anim=null,samples=[]; const el=$('#mToday');
+  // the day follows the finger 1:1 (a little damped); it fades as it leaves
+  const paint=x=>{ offset=x; body.style.transform=`translate3d(${x}px,0,0)`; body.style.opacity=String(Math.max(0,1-Math.abs(x)/260)); };
+  const clear=()=>{ if(body){ body.style.transform=''; body.style.opacity=''; body.style.willChange=''; } offset=0; base=0; };
+  el.addEventListener('touchstart',e=>{
+    if(e.touches.length>1) return;                                  // ignore extra fingers
+    const t=e.touches[0]; sx=t.clientX; sy=t.clientY; dragging=false; samples=[{t:e.timeStamp,x:t.clientX}];
+    const b=el.querySelector('.m-daybody');
+    if(anim && b===body){ anim.cancel(); anim=null; swipeTok++; base=offset; }   // grabbed mid-flight: continue from where it is on screen
+    else { base=0; offset=0; }
+    body=b; if(b) b.getAnimations().forEach(an=>an.cancel());      // never lock out input: a day still easing in yields to the finger
   },{passive:true});
-  el.addEventListener('touchend',e=>{ const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy;
-    const go=Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.4 && Date.now()-st<900;
-    if(go){ const dir=dx<0?1:-1; mDay=(mDay+dir+7)%7; renderMToday(dir); }
-    else if(body && dragging){ body.style.transition='transform 260ms cubic-bezier(.16,1,.3,1),opacity 200ms'; body.style.transform=''; body.style.opacity=''; }
-    dragging=false; },{passive:true});
+  el.addEventListener('touchmove',e=>{
+    if(!body||Motion.reduced()||mealDrag||e.touches.length>1) return;
+    const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(!dragging && Math.abs(dx)>12 && Math.abs(dx)>Math.abs(dy)*1.4) dragging=true;   // small threshold, then own the axis
+    if(dragging){ samples.push({t:e.timeStamp,x:t.clientX}); if(samples.length>6) samples.shift(); body.style.willChange='transform,opacity'; paint(base+dx*.85); }
+  },{passive:true});
+  el.addEventListener('touchend',e=>{
+    if(!body||mealDrag){ dragging=false; return; }
+    const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy, reduced=Motion.reduced();
+    if(!dragging && !base && !(reduced && Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.4)){ return; }   // a tap, not a swipe
+    const total=reduced?dx:offset, a=samples[0], z=samples[samples.length-1];
+    const vf=samples.length>1&&z.t>a.t ? (z.x-a.x)/((z.t-a.t)/1000) : 0;            // finger velocity, px/s
+    const same=Math.sign(vf)===Math.sign(total);
+    const flick=Math.abs(vf)>=110 && Math.abs(total)>=24 && same;                   // ~0.11 px/ms is enough to commit
+    const heading_home=Math.abs(vf)>=110 && !same;                                  // moving back toward rest: don't commit
+    const go=(Math.abs(total)>60||flick) && !heading_home && Math.abs(dx)+Math.abs(base)>Math.abs(dy)*1.4;
+    dragging=false;
+    const v=vf*.85, tok=swipeTok;
+    if(go){
+      const dir=total<0?1:-1, from=offset, to=Math.sign(total)*Math.max(120,body.offsetWidth*.35), op0=1-Math.min(1,Math.abs(from)/260);
+      anim=Motion.spring({from,to,velocity:v,response:.22,damping:1,rest:4,
+        onUpdate:x=>{ const k=Math.min(1,Math.max(0,(x-from)/((to-from)||1))); body.style.transform=`translate3d(${x}px,0,0)`; body.style.opacity=String(Math.max(0,op0*(1-k))); },
+        onDone:()=>{ anim=null; if(tok!==swipeTok) return; mDay=(mDay+dir+7)%7; renderMToday(dir); }});
+    } else {
+      anim=Motion.spring({from:offset,to:0,velocity:v,response:.32,damping:1,onUpdate:paint,onDone:()=>{ anim=null; clear(); }});
+    }
+  },{passive:true});
+  el.addEventListener('touchcancel',()=>{ if(!body) return; dragging=false; if(anim) anim.cancel(); anim=Motion.spring({from:offset,to:0,response:.32,damping:1,onUpdate:paint,onDone:()=>{ anim=null; clear(); }}); },{passive:true});
 })();
 $('#sheet').addEventListener('click',e=>{
   const q=s=>e.target.closest(s); let b;
@@ -898,15 +980,24 @@ $('#sheet').addEventListener('click',e=>{
 });
 $('#sheet').addEventListener('input',e=>{ if(e.target.id==='shSearch'&&sheetState){ sheetState.q=e.target.value; renderSlotList(); } });
 $('#sheetScrim').addEventListener('click',closeSheet);
+// drag the sheet down (grab handle or title area), or swipe the drawer away to the right
+Motion.dragDismiss($('#sheet'),{axis:'y',reverse:true,handle:t=>!!t.closest('.sheet-grab,.sheet-head'),ignore:'button,input,a',scrim:$('#sheetScrim'),onDismiss:closeSheet});
+Motion.dragDismiss($('#drawer'),{axis:'x',touchOnly:true,ignore:'input,textarea,select,summary,.g-tabs,.m-chips,.ruler,.wk',scrim:$('#scrim'),onDismiss:closeDrawer});
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape') return;
-  if($('#sheet').classList.contains('open')) return closeSheet();
-  if($('#drawer').classList.contains('open')) return closeDrawer();
+  // keyboard-initiated: dismiss instantly (no slide), the way a command palette would
+  const instant=(...els)=>{ els.forEach(x=>x.style.transition='none'); requestAnimationFrame(()=>requestAnimationFrame(()=>els.forEach(x=>x.style.transition=''))); };
+  if($('#sheet').classList.contains('open')){ instant($('#sheet'),$('#sheetScrim')); return closeSheet(); }
+  if($('#drawer').classList.contains('open')){ instant($('#drawer'),$('#scrim')); return closeDrawer(); }
   if(armed){ armed=null; renderQueue(); renderCal(); }
 });
-$('#reset').addEventListener('click',()=>{ if(confirm('Reset the whole week back to the starter plan?')) resetPlan(); });
+$('#reset').addEventListener('click',resetPlan);
 $('#newRecipe').addEventListener('click',openAddForm);
 $('#grocery').addEventListener('click',()=>openGrocery());
+
+/* the mobile header's real height (it grows with the personal-view banner and the user's text size) pins the day strip under it */
+(()=>{ const top=document.querySelector('.m-top'); if(!top||!window.ResizeObserver) return;
+  new ResizeObserver(()=>document.documentElement.style.setProperty('--m-top-h',top.offsetHeight+'px')).observe(top); })();
 
 /* ================= init ================= */
 let lastAuthKey=null;
