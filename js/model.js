@@ -106,16 +106,17 @@ function roundQty(q,u){
   if(u==='g'||u==='ml') return q>=100? Math.round(q/10)*10 : Math.max(5,Math.round(q/5)*5);
   return Math.round(q*2)/2 || 0.5;          // counts in halves
 }
-function serveText(r,servings,variant){
-  if(r.serveText) return r.serveText;
+function serveParts(r,servings,variant){     // cooked amounts on the plate: [dish, ...extras]
+  if(r.serveText) return [r.serveText];
   const items=(r.serve||[]).slice();
   if(r.protein){ const [,q,u,l]=r.protein[variant||'veg']; items.push([q,u,l]); }
   return items.map(([q,u,l])=>{
     const v=roundQty(q*servings,u);
     if(u==='g'||u==='ml') return `${fmtQty(v,u)} ${l}`;
     return `${niceCount(v)}${u&&u!==''?' '+u:''} ${l}`;
-  }).join(' · ');
+  });
 }
+const serveText=(r,servings,variant)=>serveParts(r,servings,variant).join(' · ');
 
 /* ================= weeks ================= */
 const ROLL_HOUR=21;                          // Sunday 9 pm: next week becomes the active week

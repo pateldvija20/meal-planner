@@ -293,6 +293,10 @@ function renderLib(){
   $('#libcount').textContent=list.length+' of '+all.length+' recipes';
   $('#lib').innerHTML = list.length ? bentoHTML(list) : `<div class="no-res">No recipes match “${esc(query)}”. Try another ingredient or tag.</div>`;
 }
+function serveHTML(r,s,v){
+  const [dish,...extra]=serveParts(r,s,v);
+  return `<b>${esc(dish)}</b>${extra.length?` <span class="dp-with">+ ${extra.map(esc).join(' · ')}</span>`:''}`;
+}
 function ingLine(it){
   const qt = it.u==='' ? niceCount(Math.ceil(it.q*2)/2) : fmtQty(roundQty(it.q,it.u),it.u);
   const who = it.who && it.who.size ? `<small class="ing-who">for ${[...it.who].map(id=>personById(id).label).join(', ')}</small>` : '';
@@ -344,7 +348,7 @@ function openDrawer(rid,ctxKey,keep){
       ${!m.fixed?`<button class="m-btn ghost" data-dremove="${ctxKey}">${m.leftover?'Cook fresh instead':'Remove'}</button>`:''}</div>` : '';
   const dd = ctx ? (m&&m.leftover ? ctx.d : ctx.d) : null;
   const ppOrder = personal ? [personById(selPerson)].concat(PEOPLE.filter(p=>p.id!==selPerson)) : PEOPLE;
-  const pp=ppOrder.map(p=>{ const q=portion(rid,p.id,slot,dd); return `<div class="dp ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="dp-h"><span class="who"><i></i>${p.label} <small>${niceCount(q.s)} serving${q.s===1?'':'s'}${q.v?' · '+(q.v==='chicken'?'chicken':esc(r.protein.veg[3])):''}</small></span><span class="dp-k">${q.kcal} kcal · <b>${q.p}g P</b></span></div><div class="dp-serve">${esc(serveText(r,q.s,q.v))}</div>${macroBar(q)}</div>`; }).join('');
+  const pp=ppOrder.map(p=>{ const q=portion(rid,p.id,slot,dd); return `<div class="dp ${p.id===selPerson?'is-sel':''}" style="--pc:${p.hex}"><div class="dp-h"><span class="who"><i></i>${p.label} <small>${niceCount(q.s)} serving${q.s===1?'':'s'}${q.v?' · '+(q.v==='chicken'?'chicken':esc(r.protein.veg[3])):''}</small></span><span class="dp-k">${q.kcal} kcal · <b>${q.p}g P</b></span></div><div class="dp-serve">${serveHTML(r,q.s,q.v)}</div>${macroBar(q)}</div>`; }).join('');
   const nv=r.protein?nutritionOf(r,'chicken'):null;
   const li=arr=>(arr&&arr.length?arr:['—']).map(x=>`<li>${esc(x)}</li>`).join('');
   $('#drawerBody').innerHTML=`
@@ -358,9 +362,9 @@ function openDrawer(rid,ctxKey,keep){
     ${!ctx&&!r.fixed?`<div class="slot-acts"><button class="m-btn ${state.queue.includes(rid)?'ghost added':''}" data-dq="${rid}">${state.queue.includes(rid)?'✓ Queued for Generate':'+ Add to plan'}</button></div>`:''}
     ${r.cat==='snack'?`<div class="pf-set snack-who"><span>Snack box for</span><div class="seg">${PEOPLE.map(p=>`<button data-snackeater="${p.id}" class="${state.snack.eaters.includes(p.id)?'active':''}">${p.label}</button>`).join('')}</div></div>`:''}
     <div class="upgrade"><span class="lift">Upgrade</span><span>${esc(r.upgrade)}</span></div>
-    <div class="d-sec"><h3>Portions <small>${r.fixed?'fixed daily':SLOT_LABEL[slot].toLowerCase()+' budget'}</small></h3><div class="d-portions">${personal&&!r.fixed ? ppOne(pp) : pp}</div>
+    <div class="d-sec"><h3>Portions <small>${r.fixed?'fixed daily':'cooked, on the plate · '+SLOT_LABEL[slot].toLowerCase()+' budget'}</small></h3><div class="d-portions">${personal&&!r.fixed ? ppOne(pp) : pp}</div>
       <p class="pf-note">1 serving ≈ ${Math.round(n.kcal)} kcal · ${Math.round(n.p)}g P · ${Math.round(n.c)}g C · ${Math.round(n.f)}g F · ${Math.round(n.fib)}g fibre${nv?` (with chicken: ${Math.round(nv.kcal)} kcal · ${Math.round(nv.p)}g P)`:''}${r.protein?' — veg version':''}</p></div>
-    <div class="d-sec"><h3>Ingredients ${r.fixed?`<small>${ingTitle}</small>`:`<span class="seg ing-toggle"><button data-ingmode="family" class="${mode==='family'?'active':''}" aria-pressed="${mode==='family'}">Family</button><button data-ingmode="me" class="${mode==='me'?'active':''}" aria-pressed="${mode==='me'}">Just ${esc(person().label)}</button></span>`}</h3>${r.fixed?'':`<p class="ing-title">${ingTitle}</p>`}${ingSub?`<div class="batch-sub">${ingSub}</div>`:''}${batchNote?`<p class="pf-note">${batchNote}</p>`:''}<ul class="d-ing">${ings||'<li><span>—</span></li>'}</ul></div>
+    <div class="d-sec"><h3>Ingredients ${r.fixed?`<small>${ingTitle}</small>`:`<span class="seg ing-toggle"><button data-ingmode="family" class="${mode==='family'?'active':''}" aria-pressed="${mode==='family'}">Family</button><button data-ingmode="me" class="${mode==='me'?'active':''}" aria-pressed="${mode==='me'}">Just ${esc(person().label)}</button></span>`}</h3>${r.fixed?'':`<p class="ing-title">${ingTitle} · raw amounts, before cooking</p>`}${ingSub?`<div class="batch-sub">${ingSub}</div>`:''}${batchNote?`<p class="pf-note">${batchNote}</p>`:''}<ul class="d-ing">${ings||'<li><span>—</span></li>'}</ul></div>
     <div class="d-sec"><h3>Method <small>${r.fixed?'per glass':mode==='me'?'same steps — use your amounts above':'for the whole batch'}</small></h3><ol class="d-steps">${li(r.method)}</ol></div>
     ${r.swaps&&r.swaps.length?`<div class="d-sec"><h3>Possible swaps</h3><ul class="d-swaps">${li(r.swaps)}</ul></div>`:''}
     ${r.custom?`<div class="form-actions"><button class="btn-ghost danger" id="d_del">Delete this recipe</button></div>`:''}`;
