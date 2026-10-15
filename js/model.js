@@ -177,6 +177,13 @@ function normalize(st){
   st.changes=Array.isArray(st.changes)?st.changes:[];
   st.profile=st.profile||{};
   st.weekStart=st.weekStart||activeWeekStart();
+  // drop references to recipes that were removed from the library since this plan was saved
+  const known=id=>!id || !!rec(id) || st.custom.some(c=>c.id===id);
+  DAYS.forEach((_,d)=>['breakfast','lunch','dinner'].forEach(s=>{ if(!known(st.plan[d][s])) st.plan[d][s]=null; }));
+  ['lunch','dinner'].forEach(s=>{ if(!known(st.farali[s])) st.farali[s]=null; });
+  if(!known(st.snack.rid)) st.snack.rid=null;
+  if(!known(st.prevSunDinner)) st.prevSunDinner=null;
+  st.queue=st.queue.filter(id=>id && known(id));
   return st;
 }
 let state = normalize(store.get(STATE_KEY) || migrateOld() || seedState());
